@@ -12,6 +12,11 @@ BASELINE (pre-Phase-1) BEHAVIOUR — intentionally kept so the phase plan has
 real work to do:
   * REGULARS = CUSTOMER_POOL[:40]   (manual slice, not behavioral)
   * first_visit stores a spend list, not the first transaction timestamp
+
+Phase 1: first_visit now stores the customer's actual first transaction
+ISO timestamp. The REGULARS list is kept only as the *generator's* activity
+model (who behaves like a regular); analytics classifies regulars
+behaviourally from transactions — see backend/analytics.py.
 """
 import json
 import random
@@ -136,7 +141,10 @@ def seed(verbose: bool = True) -> dict:
             amount = sum(prices[i] for i in items)
             rows.append((cust, float(amount), json.dumps(items), ts.isoformat()))
             customer_spend.setdefault(cust, []).append(amount)
-            if cust not in customer_first:
+            # Track the TRUE earliest ts (same-day rows are generated in random
+            # hour order, so "first generated" != "earliest").
+            prev = customer_first.get(cust)
+            if prev is None or ts < datetime.fromisoformat(prev):
                 customer_first[cust] = ts.isoformat()
         day += timedelta(days=1)
 
@@ -145,12 +153,12 @@ def seed(verbose: bool = True) -> dict:
         rows,
     )
 
-    # BASELINE FLAW: first_visit stores a spend list/object rather than the
-    # customer's actual first transaction timestamp. Phase 1 fixes this.
+    # first_visit = actual first transaction timestamp (Phase 1 fix);
+    # spend_history remains the running per-visit spend list.
     for cust, spends in customer_spend.items():
         cur.execute(
             "INSERT OR REPLACE INTO customers (id, first_visit, spend_history) VALUES (?, ?, ?)",
-            (cust, json.dumps(spends), json.dumps(spends)),
+            (cust, customer_first.get(cust), json.dumps(spends)),
         )
 
     conn.commit()
