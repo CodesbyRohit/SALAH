@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn>=0.29
+requests>=2.31
+pydantic>=2.6
+# Optional (Phase 7 memory): cognee

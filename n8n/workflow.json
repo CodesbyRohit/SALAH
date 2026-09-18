@@ -1,0 +1,44 @@
+{
+  "name": "Salah - Proactive Nudge",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 4 }]
+        }
+      },
+      "name": "Every 4 hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/nudge",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"force\": true }",
+        "options": {}
+      },
+      "name": "Salah nudge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const nudge = $json.nudge || 'Salah update';\nconsole.log('NUDGE:', nudge);\nreturn [{ json: { delivered: true, text: nudge } }];"
+      },
+      "name": "Deliver (stub)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "Every 4 hours": { "main": [[{ "node": "Salah nudge", "type": "main", "index": 0 }]] },
+    "Salah nudge": { "main": [[{ "node": "Deliver (stub)", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

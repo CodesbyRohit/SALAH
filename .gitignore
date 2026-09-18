@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+data/merchant.db
+data/interactions.jsonl
+.venv/
+.freebuff/
