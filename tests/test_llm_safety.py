@@ -249,6 +249,50 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("45000", out["rejections"][0]["detail"])
         self.assertEqual(out["source"], "deterministic")
 
+    def test_invented_count_is_rejected(self):
+        """The old blanket 0-12 exemption is gone: a small number is not a
+        licence to invent a count."""
+        bad = valid_model_output()
+        bad["answer"] = "12 customers 4 hafte se nahi aa rahe."
+        with llm_enabled():
+            out = self.run_pipeline(fake_transport(bad))
+        self.assertEqual(out["rejections"][0]["reason"], llm.R_UNSUPPORTED_NUMBER)
+        self.assertIn("count", out["rejections"][0]["detail"])
+
+    def test_digits_inside_a_date_cannot_be_laundered_into_a_count(self):
+        """6 only ever appears inside 2024-10-06, so 6 is not a usable count."""
+        bad = valid_model_output()
+        bad["answer"] = "6 customers 4 hafte se nahi aa rahe."
+        with llm_enabled():
+            out = self.run_pipeline(fake_transport(bad))
+        self.assertEqual(out["rejections"][0]["reason"], llm.R_UNSUPPORTED_NUMBER)
+
+    def test_real_counts_and_dates_and_times_are_still_allowed(self):
+        good = valid_model_output()
+        good["answer"] = (
+            "8 customers 4 hafte se nahi aa rahe aur revenue 18:00-22:00 me "
+            "aata hai. Customer C002 ka last visit 2024-11-22 tha."
+        )
+        with llm_enabled():
+            out = self.run_pipeline(fake_transport(good))
+        self.assertEqual(out["source"], "llm", out["rejections"])
+
+    def test_invented_percentage_is_rejected(self):
+        bad = valid_model_output()
+        bad["answer"] = "50% customers kam ho gaye."
+        with llm_enabled():
+            out = self.run_pipeline(fake_transport(bad))
+        self.assertEqual(out["rejections"][0]["reason"], llm.R_UNSUPPORTED_NUMBER)
+        self.assertIn("percentage", out["rejections"][0]["detail"])
+
+    def test_stated_percentage_is_allowed_in_any_precision(self):
+        for phrase in ("38.3", "38.30", "38"):
+            good = valid_model_output()
+            good["answer"] = f"Revenue ka {phrase}% shaam 18:00-22:00 me aata hai."
+            with llm_enabled():
+                out = self.run_pipeline(fake_transport(good))
+            self.assertEqual(out["source"], "llm", (phrase, out["rejections"]))
+
     def test_recommendation_change_is_rejected(self):
         bad = valid_model_output()
         bad["priority"] = "weak_weekday"  # deterministic action says lapsed_regulars
@@ -357,11 +401,54 @@ class ValidationTests(unittest.TestCase):
         bad["facts_used"] = ["weather"]
         self.assertEqual(self.check(bad)["reason"], llm.R_UNSUPPORTED_SOURCE)
 
-    def test_allowed_numbers_track_the_context(self):
+    def test_amount_allowlist_tracks_the_context(self):
         permitted = llm.allowed_numbers(self.context, self.trace, self.action)
         for number in (1000.0, 46.62, 137.09, 35.1, 31.06, 38.3, 2942.0):
             self.assertIn(number, permitted)
         self.assertNotIn(45000.0, permitted)
+
+    def test_count_pool_is_typed_not_a_range(self):
+        """Counts are the material's own integers, not every small integer."""
+        pool = llm.count_pool(self.context, self.trace, self.action)
+        for number in (2.0, 4.0, 7.0, 8.0):  # lapsed count, action weeks, below_avg_days
+            self.assertIn(number, pool)
+        # digits that only ever appear inside dates/clock times are excluded
+        for number in (6.0, 10.0, 16.0, 45.0, 50.0, 12.0, 22.0):
+            self.assertNotIn(number, pool)
+
+    def test_customer_id_digits_cannot_be_laundered_into_a_count(self):
+        ctx = sample_context()
+        ctx["lapsed_regulars"]["customers"].append(
+            {"customer_id": "CUST_013", "last_visit": "2024-11-01T12:00:00"}
+        )
+        ctx["lapsed_regulars"]["count"] = 3
+        trace = analytics.build_trace(ctx)
+        action = analytics.get_recommended_action(ctx)
+        pool = llm.count_pool(ctx, trace, action)
+        self.assertIn(3.0, pool)        # a real count
+        self.assertNotIn(13.0, pool)    # only ever appeared inside CUST_013
+
+        bad = {"answer": "13 customers 4 hafte se nahi aa rahe.",
+               "facts_used": ["lapsed_regulars"], "priority": "lapsed_regulars"}
+        verdict = llm.validate_explanation(bad, ctx, trace, action)
+        self.assertEqual(verdict["reason"], llm.R_UNSUPPORTED_NUMBER)
+        self.assertIn("count", verdict["detail"])
+
+        # a real id is not read as a numeric claim...
+        known = {"answer": "CUST_013 ne 4 hafte se transaction nahi kiya.",
+                 "facts_used": ["lapsed_regulars"], "priority": "lapsed_regulars"}
+        self.assertTrue(llm.validate_explanation(known, ctx, trace, action)["ok"])
+        # ...but an invented id is still caught
+        fake = {"answer": "CUST_999 ne 4 hafte se transaction nahi kiya.",
+                "facts_used": ["lapsed_regulars"], "priority": "lapsed_regulars"}
+        self.assertEqual(llm.validate_explanation(fake, ctx, trace, action)["reason"],
+                         llm.R_INVENTED_CUSTOMER)
+
+    def test_percentage_values_are_the_stated_ones(self):
+        percentages = llm.percentage_values(self.context, self.trace, self.action)
+        for number in (38.3, 38, 76.9, 11.5, 34.0):
+            self.assertIn(number, percentages)
+        self.assertNotIn(50.0, percentages)
 
     def test_trace_marks_causes_unknown_so_causes_cannot_be_asserted(self):
         unknowns = [t["signal"] for t in self.trace if t["confidence"] == "UNKNOWN"]

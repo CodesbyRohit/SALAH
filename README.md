@@ -61,10 +61,19 @@ Pipeline (`llm.explain_recommendation`):
    deterministic data, and it must copy the action's priority exactly.
 3. **Validate** — untrusted output is rejected when it is not a JSON object,
    breaks the schema, exceeds 4 sentences / 400 characters, changes the
-   recommendation, cites a signal that is not in the trace, introduces a number
-   that is not in the deterministic data, invents a customer id, asserts a cause
-   for an `UNKNOWN` item, or claims staff / inventory / opening hours / pricing /
-   weather / competition.
+   recommendation, cites a signal that is not in the trace, invents a number,
+   invents a customer id, asserts a cause for an `UNKNOWN` item, or claims
+   staff / inventory / opening hours / pricing / weather / competition.
+
+Numbers are validated **by category** rather than by one blanket allowlist:
+
+| Category | Rule |
+|---|---|
+| count ("8 customers", "4 hafte") | must be an integer that occurs as a count in the deterministic material (timestamps, clock times, percentages and identifiers are masked out first, so `2024-10-06` cannot become `6` nor `CUST_013` become `13`); `1` is the only structural allowance |
+| amount (money) | must exist in the material, exact or at that rounding |
+| percentage | must be a percentage the material actually states, exact or at that rounding |
+| date / clock time | must exist in the material's dates/times |
+| customer id | must be a customer id present in the context |
 4. **Fall back** — on a missing key, timeout, HTTP error, malformed or rejected
    output, `deterministic_explanation()` answers from the same context. Salah
    stays fully functional with no API key at all.

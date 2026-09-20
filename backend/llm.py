@@ -20,9 +20,11 @@ PHASE 3 PIPELINE (``explain_recommendation``)
 2. CONSTRAIN — one REST call with an evidence-only system prompt and a fixed
                JSON output contract; the deterministic trace/action are passed
                as data, never as instructions.
-3. VALIDATE  — schema, unsupported numbers, unsupported claims, unsupported
-               sources, causal upgrades of UNKNOWN/HYPOTHESIS items, invented
-               customers, and any attempt to change the recommendation.
+3. VALIDATE  — schema, unsupported numbers (validated by CATEGORY: counts,
+               amounts, percentages, dates and clock times each have their own
+               allowlist), unsupported claims, unsupported sources, causal
+               upgrades of UNKNOWN/HYPOTHESIS items, invented customers, and
+               any attempt to change the recommendation.
 4. FALL BACK — any failure (no API key, timeout, HTTP error, malformed JSON,
                rejected output) returns a deterministic explanation built from
                the same context. Salah never depends on the model.
@@ -288,10 +290,12 @@ def build_llm_payload(
 # 3. VALIDATE — the model's output is treated as untrusted input
 # ---------------------------------------------------------------------------
 
-# A digit run glued to letters/digits is an identifier (C001, W51, 999 inside
-# "C999"), not an amount. Requires the match to start at a real boundary.
-_NUM_RE = re.compile(r"(?<![A-Za-z0-9])\d[\d,]*(?:\.\d+)?")
-_CUST_ID_RE = re.compile(r"\bC\d{2,}\b")
+# A digit run glued to letters/digits/underscores is an identifier (C001,
+# CUST_013, W51), not an amount. Requires the match to start at a real
+# boundary.
+_NUM_RE = re.compile(r"(?<![A-Za-z0-9_])\d[\d,]*(?:\.\d+)?")
+_WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_CUST_ID_RE = re.compile(r"\bC(?:UST_)?\d{2,}\b", re.IGNORECASE)
 # Sentence boundary = terminator followed by whitespace/end, so the '.' in
 # "46.62" and "1000.0" is not treated as a sentence break.
 _SENTENCE_RE = re.compile(r"[.!?।]+(?=\s|$)")
@@ -330,8 +334,60 @@ _TOPIC_KEYWORDS = {
     "ticket": ["ticket", "spend", "kharch", "basket"],
 }
 
-# Small integers that are never treated as invented financial facts.
-_TRIVIAL_NUMBERS = {float(i) for i in range(0, 13)}
+# Numbers are validated by CATEGORY, never by one blanket small-number
+# exemption: a count ("12 customers") is only allowed if 12 occurs as a count in
+# the deterministic material itself. 1 is the only structurally permitted
+# number (singular/indefinite use: "ek test").
+_STRUCTURAL_COUNTS = {1.0}
+
+# Structured fields whose integer values are counts (weeks, days, customers).
+# Deliberately explicit: a loose hint like "n" would also match "revenue".
+COUNT_FIELD_NAMES = (
+    "count", "weeks", "days_in_window", "below_avg_days", "visits", "occurrences",
+)
+
+_ISO_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?")
+_CLOCK_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
+_PCT_RE = re.compile(r"(?<![A-Za-z0-9])(\d[\d,]*(?:\.\d+)?)\s*%")
+
+
+def _walk_material(
+    node: Any,
+    key: str | None,
+    strings: list[str],
+    counts: list[float],
+    depth: int = 0,
+) -> None:
+    """Collect the material's string values and count-shaped numeric fields.
+
+    Only strings are scanned for numbers, so JSON keys and unrelated numeric
+    fields (hour-of-day, timestamps) cannot pollute the count pool.
+    """
+    if depth > MAX_DEPTH:
+        return
+    if isinstance(node, dict):
+        for k, v in node.items():
+            _walk_material(v, k if isinstance(k, str) else None, strings, counts, depth + 1)
+    elif isinstance(node, (list, tuple)):
+        for v in node:
+            _walk_material(v, None, strings, counts, depth + 1)
+    elif isinstance(node, str):
+        strings.append(node)
+    elif isinstance(node, (int, float)) and not isinstance(node, bool) and key:
+        if any(name in key.lower() for name in COUNT_FIELD_NAMES):
+            try:
+                if float(node).is_integer():
+                    counts.append(float(node))
+            except (TypeError, ValueError):
+                pass
+
+
+def _material_parts(context: dict, trace: list[dict], action: dict) -> tuple[list[str], list[float]]:
+    strings: list[str] = []
+    counts: list[float] = []
+    for part in (context, trace, action):
+        _walk_material(part, None, strings, counts)
+    return strings, counts
 
 
 def allowed_sources(trace: list[dict]) -> set[str]:
@@ -346,11 +402,11 @@ def allowed_sources(trace: list[dict]) -> set[str]:
 
 
 def allowed_numbers(context: dict, trace: list[dict], action: dict) -> set[float]:
-    """Every number the model is permitted to print: the numbers that already
-    exist in the deterministic material, plus 1-decimal/whole-number roundings
-    of them (honest summarising) and trivial small integers."""
+    """Flat allowlist for AMOUNTS, DATES and CLOCK TIMES: the numbers that
+    already exist in the deterministic material, plus whole/one-decimal
+    roundings of them (honest summarising)."""
     blob = json.dumps([context, trace, action], ensure_ascii=False)
-    allowed: set[float] = set(_TRIVIAL_NUMBERS)
+    allowed: set[float] = set()
     for token in _NUM_RE.findall(blob):
         try:
             value = float(token.replace(",", ""))
@@ -360,8 +416,64 @@ def allowed_numbers(context: dict, trace: list[dict], action: dict) -> set[float
     return allowed
 
 
-def _numbers_in_text(text: str) -> list[str]:
-    return _NUM_RE.findall(text or "")
+def count_pool(context: dict, trace: list[dict], action: dict) -> set[float]:
+    """The integers the model may use as COUNTS.
+
+    Built from the material's own text with ISO timestamps, clock times and
+    percentages masked out (so digits inside a date such as ``2024-10-06`` can
+    never be laundered into a count), plus the integer values of count-shaped
+    fields such as ``weeks`` / ``days_in_window`` / ``count``.
+    """
+    strings, counts = _material_parts(context, trace, action)
+    pool: set[float] = set(_STRUCTURAL_COUNTS)
+    for text in strings:
+        # Mask timestamps, clock times, percentages and identifiers first, so
+        # digits inside a date (2024-10-06) or a customer id (CUST_013) can
+        # never be laundered into a count.
+        masked = _WORD_RE.sub(" ", _PCT_RE.sub(" ", _CLOCK_RE.sub(" ", _ISO_TS_RE.sub(" ", text))))
+        for token in _NUM_RE.findall(masked):
+            try:
+                value = float(token.replace(",", ""))
+            except ValueError:
+                continue
+            if value.is_integer() and 0 <= value < 100:
+                pool.add(value)
+    for value in counts:
+        if 0 <= value < 100:
+            pool.add(value)
+    return pool
+
+
+def percentage_values(context: dict, trace: list[dict], action: dict) -> set[float]:
+    """Percentages the material actually states, with honest roundings."""
+    strings, _ = _material_parts(context, trace, action)
+    out: set[float] = set()
+    for text in strings:
+        for token in _PCT_RE.findall(text):
+            try:
+                value = float(token.replace(",", ""))
+            except ValueError:
+                continue
+            out.update({value, round(value), round(value, 1), round(value, 2)})
+    return out
+
+
+def _classify_number_token(token: str, match: re.Match, text: str) -> str:
+    """Which category the model is using this number in."""
+    start = match.start()
+    if any(m.start() <= start < m.end() for m in _ISO_TS_RE.finditer(text)):
+        return "date"
+    if any(m.start() <= start < m.end() for m in _CLOCK_RE.finditer(text)):
+        return "time"
+    if text[match.end():match.end() + 4].lstrip().startswith("%"):
+        return "percentage"
+    if "." in token or "," in token:
+        return "amount"
+    try:
+        value = float(token.replace(",", ""))
+    except ValueError:
+        return "date"
+    return "amount" if value >= 100 else "count"
 
 
 def _sentences(text: str) -> list[str]:
@@ -462,15 +574,28 @@ def validate_explanation(
         if fact not in sources:
             return _reject(R_UNSUPPORTED_SOURCE, fact)
 
-    # --- no new numbers (invented financial facts) ----------------------
+    # --- no new numbers, validated by category --------------------------
+    # Amounts / dates / clock times share the flat material allowlist; counts
+    # and percentages are checked against their own strict sets, so a figure
+    # cannot be invented as a "count" just because it is small.
     permitted = allowed_numbers(context, trace, action)
-    for token in _numbers_in_text(projected_text):
+    counts = count_pool(context, trace, action)
+    percentages = percentage_values(context, trace, action)
+    for match in _NUM_RE.finditer(projected_text):
+        token = match.group()
         try:
             value = float(token.replace(",", ""))
         except ValueError:
             continue
-        if value not in permitted:
-            return _reject(R_UNSUPPORTED_NUMBER, token)
+        category = _classify_number_token(token, match, projected_text)
+        if category == "count":
+            if value not in counts:
+                return _reject(R_UNSUPPORTED_NUMBER, f"{token} (count)")
+        elif category == "percentage":
+            if value not in percentages:
+                return _reject(R_UNSUPPORTED_NUMBER, f"{token} (percentage)")
+        elif value not in permitted:
+            return _reject(R_UNSUPPORTED_NUMBER, f"{token} ({category})")
 
     # --- no invented customers -----------------------------------------
     known_ids = {
