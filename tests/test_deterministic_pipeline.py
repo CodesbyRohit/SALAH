@@ -182,6 +182,38 @@ class DeterministicEngineTests(unittest.TestCase):
                     "Saturday", "Sunday"):
             self.assertNotIn(f'"{day}"', body)
 
+    def test_fallback_wording_is_unchanged_for_a_well_formed_context(self):
+        """Wording lock: the Phase 3 shape-tolerance fix must not alter the
+        deterministic text produced for a valid context (every value is still
+        interpolated, in the same sentence)."""
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}), \
+                mock.patch.object(llm, "GEMINI_API_KEY", ""):
+            out = llm.explain_recommendation("kya karun?", self.context)
+
+        weekly = self.context["weekly_revenue"]
+        total = round(sum(w["revenue"] for w in weekly), 2)
+        avg = round(total / len(weekly), 2)
+        ww = self.context["weakest_weekday"]
+        lr = self.context["lapsed_regulars"]
+        tt = self.context["ticket_trend"]
+        es = self.context["evening_share"]
+        expected = (
+            f"Pichhle {len(weekly)} hafte ka total revenue {total} hai "
+            f"(average {avg} per hafta).",
+            f"{ww['weekday']} ka average {ww['avg_daily_revenue']} hai, jabki "
+            f"overall daily average {ww['overall_avg_daily_revenue']} hai.",
+            f"{lr['count']} purane regular customers 4 hafte se koi transaction "
+            "nahi kar rahe.",
+            f"Average ticket {tt['early_avg_ticket']} se {tt['recent_avg_ticket']} "
+            f"hua ({tt['change_pct']}%).",
+            f"Revenue ka {es['evening_share_pct']}% 18:00-22:00 ke beech aata hai.",
+            "Payment data se yeh pata nahi chalta ki aisa kyun hua.",
+            f"Salah ka sujhav: {self.action['experiment']} "
+            f"Kaise naapein: {self.action['measure']}",
+        )
+        for fragment in expected:
+            self.assertIn(fragment, out["answer"])
+
     # --- Phase 3 must not have broken the engine ------------------------
     def test_llm_layer_reads_the_live_context_without_mutating_it(self):
         before = json.dumps(self.context, sort_keys=True, default=str)

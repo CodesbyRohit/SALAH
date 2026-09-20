@@ -642,51 +642,83 @@ def validate_explanation(
 # 4. FALL BACK — deterministic explanation, no model involved
 # ---------------------------------------------------------------------------
 
-def deterministic_explanation(context: dict, trace: list[dict], action: dict) -> str:
-    """Hindi/Hinglish explanation built only from deterministic values. Always
-    returns a non-empty string and never depends on the network."""
+def _as_dict(value: Any) -> dict:
+    """Dict-shaped material, or {} — the safety net must never raise on a
+    caller's malformed shape."""
+    return value if isinstance(value, dict) else {}
+
+
+def _as_rows(value: Any) -> list[dict]:
+    """List of dict rows, or [] — non-dict entries are skipped."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [row for row in value if isinstance(row, dict)]
+
+
+def _as_number(value: Any) -> int | float | None:
+    """A real number, or None. Booleans do not count. The value is returned
+    unchanged so formatting matches the raw deterministic value."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def deterministic_explanation(context: Any, trace: Any, action: Any) -> str:
+    """Hindi/Hinglish explanation built only from deterministic values.
+
+    Always returns a non-empty string, never depends on the network, and —
+    because it is the safety net — never raises: a malformed piece of the
+    material is skipped rather than propagated, and a value is only quoted when
+    it is present and numeric.
+    """
+    context = _as_dict(context)
+    action = _as_dict(action)
+    trace = trace if isinstance(trace, (list, tuple)) else []
     parts: list[str] = []
 
-    weekly = context.get("weekly_revenue") or []
-    if weekly:
-        total = round(sum(float(w.get("revenue") or 0.0) for w in weekly), 2)
-        avg = round(total / len(weekly), 2)
+    revenues = [v for v in (
+        _as_number(row.get("revenue")) for row in _as_rows(context.get("weekly_revenue"))
+    ) if v is not None]
+    if revenues:
+        total = round(sum(revenues), 2)
+        avg = round(total / len(revenues), 2)
         parts.append(
-            f"Pichhle {len(weekly)} hafte ka total revenue {total} hai "
+            f"Pichhle {len(revenues)} hafte ka total revenue {total} hai "
             f"(average {avg} per hafta)."
         )
 
-    weekday = context.get("weakest_weekday") or {}
-    if weekday.get("weekday"):
+    weekday = _as_dict(context.get("weakest_weekday"))
+    day = weekday.get("weekday")
+    day_avg = _as_number(weekday.get("avg_daily_revenue"))
+    day_overall = _as_number(weekday.get("overall_avg_daily_revenue"))
+    if day and day_avg is not None and day_overall is not None:
         parts.append(
-            f"{weekday['weekday']} ka average {weekday.get('avg_daily_revenue')} hai, "
-            f"jabki overall daily average {weekday.get('overall_avg_daily_revenue')} hai."
+            f"{day} ka average {day_avg} hai, jabki overall daily average {day_overall} hai."
         )
 
-    lapsed = context.get("lapsed_regulars") or {}
-    if lapsed.get("count"):
+    lapsed_count = _as_number(_as_dict(context.get("lapsed_regulars")).get("count"))
+    if lapsed_count:
         parts.append(
-            f"{lapsed['count']} purane regular customers 4 hafte se koi "
+            f"{lapsed_count} purane regular customers 4 hafte se koi "
             "transaction nahi kar rahe."
         )
 
-    ticket = context.get("ticket_trend") or {}
-    if ticket:
-        parts.append(
-            f"Average ticket {ticket.get('early_avg_ticket')} se "
-            f"{ticket.get('recent_avg_ticket')} hua ({ticket.get('change_pct')}%)."
-        )
+    ticket = _as_dict(context.get("ticket_trend"))
+    early = _as_number(ticket.get("early_avg_ticket"))
+    recent = _as_number(ticket.get("recent_avg_ticket"))
+    change = _as_number(ticket.get("change_pct"))
+    if early is not None and recent is not None and change is not None:
+        parts.append(f"Average ticket {early} se {recent} hua ({change}%).")
 
-    evening = context.get("evening_share") or {}
-    if evening:
-        parts.append(
-            f"Revenue ka {evening.get('evening_share_pct')}% 18:00-22:00 ke beech aata hai."
-        )
+    share = _as_number(_as_dict(context.get("evening_share")).get("evening_share_pct"))
+    if share is not None:
+        parts.append(f"Revenue ka {share}% 18:00-22:00 ke beech aata hai.")
 
     if not parts:
         parts.append("Abhi data itna kam hai ki koi clear trend nahi dikh raha.")
 
-    if any(item.get("confidence") == "UNKNOWN" for item in trace):
+    if any(isinstance(item, dict) and item.get("confidence") == "UNKNOWN"
+           for item in trace):
         parts.append("Payment data se yeh pata nahi chalta ki aisa kyun hua.")
 
     priority = action.get("priority")
@@ -757,12 +789,23 @@ def explain_recommendation(
     """
     global _last_error
     sanitized_ctx, w_ctx = sanitize_context(context)
+    build_warnings: list[str] = []
     if trace is None or action is None:
-        trace = analytics.build_trace(sanitized_ctx) if trace is None else trace
-        action = analytics.get_recommended_action(sanitized_ctx) if action is None else action
+        # The deterministic engine remains the source of truth, but a malformed
+        # context must not be able to break the safety net that protects it.
+        try:
+            built_trace = analytics.build_trace(sanitized_ctx)
+            built_action = analytics.get_recommended_action(sanitized_ctx)
+        except Exception as exc:
+            built_trace, built_action = [], {"priority": "none"}
+            build_warnings.append(f"trace_build_failed:{type(exc).__name__}")
+        if trace is None:
+            trace = built_trace
+        if action is None:
+            action = built_action
     sanitized_trace, w_trace = sanitize_trace(trace)
     sanitized_action, w_action = sanitize_action(action)
-    warnings = w_ctx + w_trace + w_action
+    warnings = w_ctx + build_warnings + w_trace + w_action
 
     result = {
         "answer": "",

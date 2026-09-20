@@ -460,6 +460,73 @@ class ValidationTests(unittest.TestCase):
         self.assertTrue(self.check(raw)["ok"])
 
 
+class MalformedMaterialTests(unittest.TestCase):
+    """The safety net must not raise on malformed input.
+
+    ``sanitize_context`` deliberately accepts arbitrary JSON shapes (it drops
+    unknown keys and unsupported types), so whatever it lets through must also
+    survive the deterministic fallback — otherwise a bad context could take out
+    the one path that is supposed to protect Salah from the model.
+    """
+
+    MALFORMED = {
+        "rows where dicts expected": {"weekly_revenue": [1, 2, 3]},
+        "string where dict expected": {"weakest_weekday": "Tuesday"},
+        "list where dict expected": {"ticket_trend": ["x"]},
+        "non-empty list where dict expected": {"evening_share": [1]},
+        "string where customer list expected":
+            {"lapsed_regulars": {"count": 2, "customers": "abc"}},
+        "numbers where strings expected": {"generated_at": 5, "weekday_profile": 7},
+    }
+
+    def test_fallback_never_raises_on_a_malformed_context(self):
+        with llm_disabled():
+            for name, ctx in self.MALFORMED.items():
+                with self.subTest(name):
+                    out = llm.explain_recommendation("kya haal hai?", ctx)
+                    self.assertEqual(out["source"], "deterministic")
+                    self.assertTrue(out["answer"].strip())
+                    self.assertEqual(out["action"]["priority"], "none")
+                    self.assertEqual(out["trace"], [])
+
+    def test_deterministic_explanation_tolerates_junk_directly(self):
+        junk = (
+            None, {}, [], "text", 7,
+            {"weekly_revenue": [None, "x", 3]},
+            {"evening_share": "38.3"},
+            {"ticket_trend": [None]},
+            {"lapsed_regulars": []},
+        )
+        for bad in junk:
+            with self.subTest(bad=repr(bad)):
+                text = llm.deterministic_explanation(bad, bad, bad)
+                self.assertIsInstance(text, str)
+                self.assertTrue(text.strip())
+
+    def test_values_are_only_quoted_when_present_and_numeric(self):
+        text = llm.deterministic_explanation(
+            {"ticket_trend": {"change_pct": -11.5}, "evening_share": {}},
+            [], [],
+        )
+        self.assertNotIn("None", text)
+        self.assertNotIn("Average ticket", text)
+
+    def test_build_failure_is_reported_not_swallowed(self):
+        with llm_disabled():
+            out = llm.explain_recommendation("q", {"weekly_revenue": [1, 2, 3]})
+        self.assertIn("trace_build_failed:TypeError", out["sanitize_warnings"])
+
+    def test_a_caller_supplied_trace_is_not_discarded_by_a_build_failure(self):
+        ctx = {"weekly_revenue": [1, 2, 3]}
+        with llm_disabled():
+            out = llm.explain_recommendation(
+                "q", ctx, trace=[], action={"priority": "none"}
+            )
+        self.assertEqual(out["sanitize_warnings"], [])
+        self.assertEqual(out["action"]["priority"], "none")
+        self.assertTrue(out["answer"].strip())
+
+
 class StatusTests(unittest.TestCase):
     def test_status_reports_configuration_only(self):
         with llm_disabled():
