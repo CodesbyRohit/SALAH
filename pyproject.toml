@@ -13,3 +13,6 @@ dependencies = [
     "requests>=2.31",
     "pydantic>=2.6",
 ]
+
+[tool.vercel]
+entrypoint = "backend.main:app"
