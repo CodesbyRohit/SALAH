@@ -135,6 +135,17 @@ def _api_key() -> str:
     return os.getenv("GEMINI_API_KEY") or GEMINI_API_KEY
 
 
+def _model() -> str:
+    return os.getenv("GEMINI_MODEL") or GEMINI_MODEL
+
+
+def _timeout() -> float:
+    try:
+        return float(os.getenv("GEMINI_TIMEOUT", str(LLM_TIMEOUT_SECONDS)))
+    except (TypeError, ValueError):
+        return LLM_TIMEOUT_SECONDS
+
+
 def llm_available() -> bool:
     """True only when an API key is configured. Everything still works when
     this is False — the deterministic fallback answers instead."""
@@ -144,8 +155,8 @@ def llm_available() -> bool:
 def status() -> dict:
     return {
         "llm_available": llm_available(),
-        "model": GEMINI_MODEL,
-        "timeout_seconds": LLM_TIMEOUT_SECONDS,
+        "model": _model(),
+        "timeout_seconds": _timeout(),
         "last_error": _last_error,
         "confidence_levels": list(CONFIDENCE_LEVELS),
     }
@@ -920,10 +931,10 @@ def explain_recommendation(
         question=question, history=_sanitize_history(history),
         language=language,
     )
-    url = GEMINI_URL_TEMPLATE.format(model=GEMINI_MODEL)
+    url = GEMINI_URL_TEMPLATE.format(model=_model())
     post = transport or _default_transport
     try:
-        data = post(url, payload, LLM_TIMEOUT_SECONDS)
+        data = post(url, payload, _timeout())
         _last_error = None
     except Exception as exc:  # timeout, HTTP error, connection reset, bad JSON
         _last_error = f"{type(exc).__name__}: {exc}"
