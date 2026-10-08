@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -13,12 +13,3 @@ dependencies = [
     "requests>=2.31",
     "pydantic>=2.6",
 ]
-
-[project.scripts]
-salah = "backend.main:app"
-
-[tool.vercel]
-runtime = "python3.12"
-
-[[tool.vercel.env]]
-src = "backend"
