@@ -247,6 +247,15 @@ def sanitize_action(action: Any) -> tuple[dict, list[str]]:
 
 # ---------------------------------------------------------------------------
 # 2. CONSTRAIN — build the one payload that goes to the model
+LANGUAGE_NAMES = {
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "hi": "Hindi",
+}
+
+# ---------------------------------------------------------------------------
+# 2. CONSTRAIN — build the one payload that goes to the model
 # ---------------------------------------------------------------------------
 
 def build_llm_payload(
@@ -255,8 +264,10 @@ def build_llm_payload(
     action: dict,
     question: str | None = None,
     history: list | None = None,
+    language: str = "en",
 ) -> dict:
     """Deterministic Gemini REST payload. Pure function — no I/O."""
+    lang_name = LANGUAGE_NAMES.get(language, "English")
     contents: list[dict] = []
     if history:
         for h in list(history)[-MAX_HISTORY_TURNS:]:
@@ -267,6 +278,7 @@ def build_llm_payload(
             if text:
                 contents.append({"role": role, "parts": [{"text": text}]})
     contents.append({"role": "user", "parts": [{"text": (
+        f"TARGET_LANGUAGE: Answer in {lang_name} ({language}). Preserve all numbers, currency values and percentages accurately.\n\n"
         "DETERMINISTIC_DATA (the only numbers you may use):\n"
         f"{json.dumps(context, ensure_ascii=False)}\n\n"
         "EVIDENCE_TRACE (confidence labels are final — do not upgrade them):\n"
@@ -304,12 +316,16 @@ _SENTENCE_RE = re.compile(r"[.!?।]+(?=\s|$)")
 # ("wajah", "reason") are allowed when the sentence negates them.
 _ASSERTIVE_CAUSE_RE = re.compile(
     r"\b(because|due to|caused by|caused|the reason is|reason is|as a result of|"
-    r"isliye|kyunki|kyon ki|kyun ki|wajah se|ki wajah se)\b",
+    r"isliye|kyunki|kyon ki|kyun ki|wajah se|ki wajah se|"
+    r"porque|debido a|causado por|debido|en razón de|"
+    r"parce que|en raison de|à cause de)\b",
     re.IGNORECASE,
 )
-_REASON_MARKER_RE = re.compile(r"\b(wajah|reason|karan|driver)\b", re.IGNORECASE)
+_REASON_MARKER_RE = re.compile(r"\b(wajah|reason|karan|driver|razón|motivo|raison)\b", re.IGNORECASE)
 _NEGATION_RE = re.compile(
-    r"\b(nahi|nahin|not|cannot|can'?t|no|unknown|unclear|pata nahi|maloom nahi)\b",
+    r"\b(nahi|nahin|not|cannot|can'?t|no|unknown|unclear|pata nahi|maloom nahi|"
+    r"sin|ningún|ninguna|desconocido|no se sabe|"
+    r"pas|aucun|aucune|inconnu|ne)\b",
     re.IGNORECASE,
 )
 
@@ -663,14 +679,15 @@ def _as_number(value: Any) -> int | float | None:
     return value
 
 
-def deterministic_explanation(context: Any, trace: Any, action: Any) -> str:
-    """Hindi/Hinglish explanation built only from deterministic values.
+def deterministic_explanation(context: Any, trace: Any, action: Any, language: str = "hinglish") -> str:
+    """Multilingual explanation built only from deterministic values.
 
     Always returns a non-empty string, never depends on the network, and —
     because it is the safety net — never raises: a malformed piece of the
     material is skipped rather than propagated, and a value is only quoted when
     it is present and numeric.
     """
+    lang = language if language in ("en", "es", "fr", "hi", "hinglish") else "hinglish"
     context = _as_dict(context)
     action = _as_dict(action)
     trace = trace if isinstance(trace, (list, tuple)) else []
@@ -682,53 +699,122 @@ def deterministic_explanation(context: Any, trace: Any, action: Any) -> str:
     if revenues:
         total = round(sum(revenues), 2)
         avg = round(total / len(revenues), 2)
-        parts.append(
-            f"Pichhle {len(revenues)} hafte ka total revenue {total} hai "
-            f"(average {avg} per hafta)."
-        )
+        if lang == "es":
+            parts.append(f"El ingreso total de las últimas {len(revenues)} semanas es {total} (promedio {avg} por semana).")
+        elif lang == "fr":
+            parts.append(f"Le revenu total des {len(revenues)} dernières semaines est de {total} (moyenne {avg} par semaine).")
+        elif lang == "en":
+            parts.append(f"Total revenue for the past {len(revenues)} weeks is {total} (average {avg} per week).")
+        elif lang == "hi":
+            parts.append(f"पिछले {len(revenues)} हफ्तों की कुल कमाई {total} है (औसत {avg} प्रति सप्ताह)।")
+        else: # hinglish
+            parts.append(f"Pichhle {len(revenues)} hafte ka total revenue {total} hai (average {avg} per hafta).")
 
     weekday = _as_dict(context.get("weakest_weekday"))
     day = weekday.get("weekday")
     day_avg = _as_number(weekday.get("avg_daily_revenue"))
     day_overall = _as_number(weekday.get("overall_avg_daily_revenue"))
     if day and day_avg is not None and day_overall is not None:
-        parts.append(
-            f"{day} ka average {day_avg} hai, jabki overall daily average {day_overall} hai."
-        )
+        if lang == "es":
+            parts.append(f"El promedio de {day} es {day_avg}, en comparación con el promedio diario general de {day_overall}.")
+        elif lang == "fr":
+            parts.append(f"La moyenne du {day} est de {day_avg}, contre une moyenne quotidienne globale de {day_overall}.")
+        elif lang == "en":
+            parts.append(f"{day} average is {day_avg}, compared to overall daily average of {day_overall}.")
+        elif lang == "hi":
+            parts.append(f"{day} का औसत {day_avg} है, जबकि कुल दैनिक औसत {day_overall} है।")
+        else:
+            parts.append(f"{day} ka average {day_avg} hai, jabki overall daily average {day_overall} hai.")
 
     lapsed_count = _as_number(_as_dict(context.get("lapsed_regulars")).get("count"))
     if lapsed_count:
-        parts.append(
-            f"{lapsed_count} purane regular customers 4 hafte se koi "
-            "transaction nahi kar rahe."
-        )
+        if lang == "es":
+            parts.append(f"{lapsed_count} clientes habituales no han realizado transacciones en 4 semanas.")
+        elif lang == "fr":
+            parts.append(f"{lapsed_count} clients réguliers n'ont pas effectué de transactions depuis 4 semaines.")
+        elif lang == "en":
+            parts.append(f"{lapsed_count} regular customers have not made transactions in 4 weeks.")
+        elif lang == "hi":
+            parts.append(f"{lapsed_count} पुराने नियमित ग्राहक 4 हफ्तों से लेन-देन नहीं कर रहे हैं।")
+        else:
+            parts.append(f"{lapsed_count} purane regular customers 4 hafte se koi transaction nahi kar rahe.")
 
     ticket = _as_dict(context.get("ticket_trend"))
     early = _as_number(ticket.get("early_avg_ticket"))
     recent = _as_number(ticket.get("recent_avg_ticket"))
     change = _as_number(ticket.get("change_pct"))
     if early is not None and recent is not None and change is not None:
-        parts.append(f"Average ticket {early} se {recent} hua ({change}%).")
+        if lang == "es":
+            parts.append(f"El ticket promedio cambió de {early} a {recent} ({change}%).")
+        elif lang == "fr":
+            parts.append(f"Le ticket moyen est passé de {early} à {recent} ({change}%).")
+        elif lang == "en":
+            parts.append(f"Average ticket went from {early} to {recent} ({change}%).")
+        elif lang == "hi":
+            parts.append(f"औसत टिकट {early} से {recent} हुआ ({change}%)।")
+        else:
+            parts.append(f"Average ticket {early} se {recent} hua ({change}%).")
 
     share = _as_number(_as_dict(context.get("evening_share")).get("evening_share_pct"))
     if share is not None:
-        parts.append(f"Revenue ka {share}% 18:00-22:00 ke beech aata hai.")
+        if lang == "es":
+            parts.append(f"El {share}% de los ingresos proviene de 18:00-22:00.")
+        elif lang == "fr":
+            parts.append(f"{share}% des revenus proviennent entre 18:00 et 22:00.")
+        elif lang == "en":
+            parts.append(f"{share}% of revenue comes between 18:00-22:00.")
+        elif lang == "hi":
+            parts.append(f"कमाई का {share}% 18:00-22:00 के बीच आता है।")
+        else:
+            parts.append(f"Revenue ka {share}% 18:00-22:00 ke beech aata hai.")
 
     if not parts:
-        parts.append("Abhi data itna kam hai ki koi clear trend nahi dikh raha.")
+        if lang == "es":
+            parts.append("Los datos son limitados para mostrar una tendencia clara.")
+        elif lang == "fr":
+            parts.append("Les données sont trop limitées pour afficher une tendance claire.")
+        elif lang == "en":
+            parts.append("Data is currently too limited to show a clear trend.")
+        elif lang == "hi":
+            parts.append("अभी डेटा कम है जिससे स्पष्ट रुझान नहीं दिख रहा।")
+        else:
+            parts.append("Abhi data itna kam hai ki koi clear trend nahi dikh raha.")
 
-    if any(isinstance(item, dict) and item.get("confidence") == "UNKNOWN"
-           for item in trace):
-        parts.append("Payment data se yeh pata nahi chalta ki aisa kyun hua.")
+    if any(isinstance(item, dict) and item.get("confidence") == "UNKNOWN" for item in trace):
+        if lang == "es":
+            parts.append("Los datos de pago no muestran por qué sucedió esto.")
+        elif lang == "fr":
+            parts.append("Les données de paiement n'indiquent pas pourquoi cela s'est produit.")
+        elif lang == "en":
+            parts.append("Payment data does not show why this happened.")
+        elif lang == "hi":
+            parts.append("पेमेंट डेटा से यह पता नहीं चलता कि ऐसा क्यों हुआ।")
+        else:
+            parts.append("Payment data se yeh pata nahi chalta ki aisa kyun hua.")
 
     priority = action.get("priority")
     if priority and priority != "none":
-        parts.append(
-            f"Salah ka sujhav: {action.get('experiment')} "
-            f"Kaise naapein: {action.get('measure')}"
-        )
+        if lang == "es":
+            parts.append(f"Sugerencia de Salah: {action.get('experiment')} Cómo medir: {action.get('measure')}")
+        elif lang == "fr":
+            parts.append(f"Suggestion de Salah : {action.get('experiment')} Comment mesurer : {action.get('measure')}")
+        elif lang == "en":
+            parts.append(f"Salah suggestion: {action.get('experiment')} How to measure: {action.get('measure')}")
+        elif lang == "hi":
+            parts.append(f"सलाह का सुझाव: {action.get('experiment')} कैसे मापें: {action.get('measure')}")
+        else:
+            parts.append(f"Salah ka sujhav: {action.get('experiment')} Kaise naapein: {action.get('measure')}")
     else:
-        parts.append("Filhaal koi bada experiment suggest nahi karte — measure karte rahiye.")
+        if lang == "es":
+            parts.append("Por ahora no se sugiere ningún experimento mayor — continúe midiendo.")
+        elif lang == "fr":
+            parts.append("Pas d'expérience majeure suggérée pour le moment — continuez à mesurer.")
+        elif lang == "en":
+            parts.append("No major experiment suggested for now — keep measuring.")
+        elif lang == "hi":
+            parts.append("फिलहाल कोई बड़ा प्रयोग नहीं — मापते रहें।")
+        else:
+            parts.append("Filhaal koi bada experiment suggest nahi karte — measure karte rahiye.")
 
     return " ".join(parts)
 
@@ -771,6 +857,7 @@ def explain_recommendation(
     action: dict | None = None,
     history: list | None = None,
     transport: Callable[[str, dict, float], dict] | None = None,
+    language: str = "hinglish",
 ) -> dict:
     """Run the full Phase 3 pipeline and always return a usable explanation.
 
@@ -821,7 +908,7 @@ def explain_recommendation(
     def fallback(reason: str) -> dict:
         result["fallback_reason"] = reason
         result["answer"] = deterministic_explanation(
-            sanitized_ctx, sanitized_trace, sanitized_action
+            sanitized_ctx, sanitized_trace, sanitized_action, language=language
         )
         return result
 
@@ -831,6 +918,7 @@ def explain_recommendation(
     payload = build_llm_payload(
         sanitized_ctx, sanitized_trace, sanitized_action,
         question=question, history=_sanitize_history(history),
+        language=language,
     )
     url = GEMINI_URL_TEMPLATE.format(model=GEMINI_MODEL)
     post = transport or _default_transport
@@ -865,6 +953,7 @@ def explain(
     merchant_context: dict,
     history: list | None = None,
     transport: Callable[[str, dict, float], dict] | None = None,
+    language: str = "hinglish",
 ) -> str:
     """Baseline-compatible entrypoint (used by ``backend/main.py``): runs the
     safety pipeline and returns only the text. Never returns None — when the
@@ -872,7 +961,7 @@ def explain(
     explanation is returned instead."""
     result = explain_recommendation(
         question, merchant_context, trace=None, action=None,
-        history=history, transport=transport,
+        history=history, transport=transport, language=language,
     )
     return result["answer"]
 

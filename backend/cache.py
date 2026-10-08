@@ -24,7 +24,9 @@ def _normalize(q: str) -> str:
     return " ".join(q.lower().strip().split())
 
 
-def get_cached(question: str) -> dict | None:
+def get_cached(question: str, language: str = "en") -> dict | None:
+    if language != "en":
+        return None
     return _cache.get(_normalize(question))
 
 

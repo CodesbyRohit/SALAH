@@ -99,14 +99,19 @@ def reset_conversation() -> None:
     LOG_PATH.unlink(missing_ok=True)
 
 
+def _count_local_log_entries() -> int:
+    if not LOG_PATH.exists():
+        return 0
+    with LOG_PATH.open(encoding="utf-8") as f:
+        return sum(1 for _ in f)
+
+
 def status() -> dict:
     return {
         "cognee_available": _cognee_ok(),
         "last_cognee_error": _last_cognee_error,
         "local_log": str(LOG_PATH),
-        "local_log_entries": (
-            sum(1 for _ in LOG_PATH.open(encoding="utf-8")) if LOG_PATH.exists() else 0
-        ),
+        "local_log_entries": _count_local_log_entries(),
     }
 
 

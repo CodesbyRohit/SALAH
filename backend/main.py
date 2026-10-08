@@ -44,27 +44,12 @@ SUPPORTED_LANGUAGES = {
     "fr": "French",
 }
 
-FALLBACK_MESSAGES = {
-    "en": "Sorry, jawab generate nahi ho paya. Dobara poochhiye.",
-    "hi": "Maf kijiye, jawab generate nahi ho paaya. Dobara poochhiye.",
-    "es": "Lo siento, no pude generar la respuesta. Inténtalo otra vez.",
-    "fr": "Désolé, je n'ai pas pu générer la réponse. Réessayez.",
-}
-
 
 def normalize_language(code: str | None) -> str:
     if not isinstance(code, str):
         return "en"
     value = code.strip().lower()
     return value if value in SUPPORTED_LANGUAGES else "en"
-
-
-def language_instruction(code: str) -> str:
-    label = SUPPORTED_LANGUAGES.get(code, "English")
-    return (
-        f"Answer the merchant in {label}. Keep all financial numbers, percentages and "
-        "currency values accurate. Be concise, actionable, and do not provide investment advice."
-    )
 
 
 class AskRequest(BaseModel):
@@ -83,6 +68,11 @@ class NudgeRequest(BaseModel):
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
+
+SARVAM_LANG_MAP = {
+    "hi": "hi-IN",
+    "en": "en-IN",
+}
 
 
 def sarvam_stt(audio_bytes: bytes) -> str | None:
@@ -105,8 +95,9 @@ def sarvam_stt(audio_bytes: bytes) -> str | None:
 def sarvam_tts(text: str, language: str = "en") -> bytes | None:
     if not SARVAM_API_KEY:
         return None
-    target_lang = "en-IN" if language == "en" else "hi-IN" if language == "hi" else None
-    if target_lang is None:
+    target_lang = SARVAM_LANG_MAP.get(language)
+    if not target_lang:
+        # Voice is unsupported for non-Indian languages on Sarvam
         return None
     try:
         resp = requests.post(
@@ -154,30 +145,25 @@ def context():
 @app.post("/ask")
 def ask(req: AskRequest):
     question = req.question.strip()
+    lang = normalize_language(req.language)
     if not question:
         raise HTTPException(status_code=400, detail="empty question")
 
-    language = normalize_language(req.language)
-    if language == "en":
-        llm_question = question
-        use_cache = bool(demo_cache.get_cached(question))
-    else:
-        llm_question = f"{language_instruction(language)} {question}"
-        use_cache = False
-
-    if use_cache:
-        answer = demo_cache.get_cached(question)["answer"]
+    # cache-first for scripted demo questions
+    hit = demo_cache.get_cached(question, language=lang)
+    if hit:
+        answer = hit["answer"]
     else:
         ctx = analytics.build_merchant_context()
-        answer = llm.explain(llm_question, ctx, conversation_history) or FALLBACK_MESSAGES.get(language, FALLBACK_MESSAGES["en"])
+        answer = llm.explain(question, ctx, conversation_history, language=lang) or ""
         if not answer:
-            answer = FALLBACK_MESSAGES.get(language, FALLBACK_MESSAGES["en"])
+            answer = llm.deterministic_explanation(ctx, [], {"priority": "none"}, language=lang)
 
     conversation_history.append({"role": "user", "text": question})
     conversation_history.append({"role": "assistant", "text": answer})
     memory.store(question, answer)
 
-    return {"answer": answer, "trace": None, "language": language}
+    return {"answer": answer, "trace": None, "language": lang}
 
 
 @app.post("/nudge")
@@ -206,10 +192,10 @@ async def voice_stt(file: UploadFile = File(...)):
 @app.post("/voice/tts")
 def voice_tts(payload: dict):
     text = (payload or {}).get("text", "")
-    language = normalize_language((payload or {}).get("language"))
+    lang = normalize_language((payload or {}).get("language"))
     if not text:
         raise HTTPException(status_code=400, detail="empty text")
-    audio = sarvam_tts(text, language)
+    audio = sarvam_tts(text, language=lang)
     if audio is None:
         raise HTTPException(status_code=503, detail="TTS unavailable")
     tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
