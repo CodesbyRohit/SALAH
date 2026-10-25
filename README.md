@@ -46,11 +46,11 @@ Payment data (SQLite)
 |---|---|
 | `GET /api/health` | `status`, `llm_available`, `voice {available, languages}`, `languages`, `memory`, `cache_entries`, `time` |
 | `GET /context` | deterministic merchant metrics (`weekly_revenue`, `revenue_by_hour`, `weakest_weekday`, `lapsed_regulars`, `ticket_trend`, `evening_share`, `weekday_profile`, `generated_at`) |
-| `GET /insights` | the deterministic evidence `trace` and the one recommended `action`, straight from `analytics.py` (no LLM) |
+| `GET /insights` | the deterministic evidence `trace` (each item: `signal`, `value`, `implication`, `source`, `confidence`, `window`) and the one recommended `action` (`priority`, `observed`, `hypothesis`, `experiment`, `baseline`, `measure`, `confounders`, `unknown`, `basis`, `weeks`), straight from `analytics.py` (no LLM) |
 | `POST /ask` `{question, language}` | `answer`, `trace`, `action`, `source` (`llm` / `deterministic` / `cache`), `fallback_reason`, `language` |
 | `POST /nudge` `{force, language}` | `nudge`, `language`, generated on request |
-| `POST /voice/stt` (multipart `file`) | `{text}`; `503` when Sarvam is not configured |
-| `POST /voice/tts` `{text, language}` | audio bytes; `503` when unavailable or the language is not `en`/`hi` |
+| `POST /voice/stt` (multipart `file`) | `{text}`; `415` unless the upload is `audio/*`, `413` above 5 MB, `503` when Sarvam is not configured |
+| `POST /voice/tts` `{text, language}` | audio bytes; `413` above 2,500 characters, `503` when unavailable or the language is not `en`/`hi` |
 | `POST /reset` | clears the conversation and the local interaction log |
 
 ## Data location and first-run initialisation
@@ -138,6 +138,28 @@ starts mid-week. Model text is inserted with `textContent` only. API and voice
 failures are explained with a retry; nothing is simulated. Synthetic data is
 labelled in the top bar, the rail, every view and the System page.
 
+## Metric definitions
+
+Every number on screen comes from `backend/analytics.py`, anchored to the last
+transaction in the data (`generated_at`), never to today's date.
+`tests/test_metric_definitions.py` recomputes each one from raw SQL.
+
+| Metric | Definition |
+|---|---|
+| Revenue, trailing window | Sum of all payments in the 8 weeks (56 days) before the last transaction |
+| Weekly revenue chart | The same 56 days in calendar weeks (Mon–Sun); the first bar is partial and labelled so |
+| Weekly average (evidence, answers) | 8-week total ÷ 8, never ÷ the number of calendar-week bars |
+| Average per trading day, weakest weekday | Revenue ÷ days with at least one payment, over the window's whole days (the window's first, partial calendar day is left out). Payment data can't tell a closed day from a day without sales, so days without payments are not counted as zero |
+| Average ticket | Mean payment amount in the last 6 weeks, compared with the 6 weeks before |
+| Evening share | Share of the 8-week revenue paid between 18:00 and 21:59 |
+| Regular customer | 8+ payments spanning 60+ days, measured before the last 8 weeks |
+| Lapsed regular | A regular with no payment in the last 4 weeks |
+
+The recommended experiment is a plan, not a result: hypothesis, action,
+baseline, success measure, measurement window and confounders. SALAH stores no
+experiment runs or outcomes, so its status is always *Proposed · not yet
+measured*, and the model validator rejects any claim that an experiment worked.
+
 ## Honest data statement
 
 The dataset is **representative synthetic merchant data with planted business
@@ -168,8 +190,17 @@ Pipeline (`llm.explain_recommendation`):
 3. **Validate** — untrusted output is rejected when it is not a JSON object,
    breaks the schema, exceeds 4 sentences / 400 characters, changes the
    recommendation, cites a signal that is not in the trace, invents a number,
-   invents a customer id, asserts a cause for an `UNKNOWN` item, or claims
-   staff / inventory / opening hours / pricing / weather / competition.
+   invents a customer id, asserts a cause for an `UNKNOWN` item, claims
+   staff / inventory / opening hours / pricing / weather / competition, says
+   the suggested experiment already worked (no outcome data exists), or makes a
+   directional claim the data does not support. Directions are checked against
+   the comparison that defines each metric, over its own period: the average
+   ticket (last 6 weeks vs the 6 before), a weekday vs the overall average
+   ("lowest"/"highest" must name the actual min/max day), lapsed regulars
+   (only "fewer"). Revenue has no period-over-period comparison, so "revenue
+   went up/down" is always rejected; so are claims whose period, subject or
+   direction is ambiguous, or that round to no change. Proposals ("test an
+   offer and see whether visits improve") are not claims and are left alone.
 
 Numbers are validated **by category** rather than by one blanket allowlist:
 
@@ -237,8 +268,9 @@ npx vercel env run -- python <repo>\tests\e2e\e2e_ui.py --base-url https://<prev
   through every workflow: data loading, charts and keyboard tooltips, evidence
   filters, copilot (real `/ask`), XSS-safe rendering, error and retry, reset
   confirmation, language switching, nudges, system status, keyboard navigation,
-  reduced motion, the WebGL-unavailable fallback, and no horizontal overflow at
-  360 / 390 / 768 / 1280 / 1440 px. Voice success paths use route mocks plus
+  reduced motion, the WebGL-unavailable fallback, KPI periods and definitions,
+  evidence periods and the experiment plan, a failed data load with retry, and
+  no horizontal overflow at 320 / 360 / 390 / 768 / 1280 / 1440 px. Voice success paths use route mocks plus
   Chromium's fake microphone because Sarvam needs a key; `/reset` is mocked in
   the browser so a run does not delete your local interaction log.
 
@@ -254,6 +286,9 @@ npx vercel env run -- python <repo>\tests\e2e\e2e_ui.py --base-url https://<prev
   matching the original seed byte-for-byte, refusal to overwrite unexpected
   files, serverless path resolution, the seed CLI, and every API endpoint on a
   fresh database and when initialisation fails.
+- `tests/test_metric_definitions.py` — every displayed metric recomputed from
+  raw SQL (see *Metric definitions*), the evidence periods, the grounded
+  hypothesis, and a complete experiment plan that claims no outcome.
 
 ## Status
 
@@ -285,7 +320,26 @@ a stub), authentication.
 - Fonts load from Google Fonts; offline, system fonts are used instead.
 - Conversation history is one in-process list shared by every browser session
   (single-merchant demo). On serverless it is also per instance.
-- The API has no authentication and no rate limiting; CORS allows any origin.
-  Fine for a public synthetic demo, but a configured `GEMINI_API_KEY` makes
-  `/ask` a paid call anyone can trigger: add rate limiting (for example a Vercel
-  Firewall rule) before enabling it on a public URL.
+- The API has no authentication and no rate limiting (see *Security posture*).
+
+## Security posture
+
+Verified controls: request bodies are schema-validated (422 on bad input);
+model text is rendered with `textContent` only; the analytics database is opened
+read-only; error responses carry no exception text or filesystem paths;
+`/api/health` reports no paths or secrets; the Gemini key travels in a header,
+never a URL; voice uploads must be `audio/*` and at most 5 MB, and TTS text at
+most 2,500 characters, checked before any provider call; no CORS grant is
+given by default (the frontend is same-origin; `SALAH_CORS_ORIGINS` opts
+specific origins in); source, data and `.env` files are not served.
+
+Static files are sent with `s-maxage` so Vercel's CDN can serve them from the
+edge (browsers still revalidate with `max-age=0`); API responses are not cached.
+
+| | Public synthetic demo (today) | Real merchant data (future) |
+|---|---|---|
+| Access | Public, no login: the data is synthetic | Per-merchant authentication; data scoped by merchant id |
+| Abuse / spend | Keep `GEMINI_API_KEY` unset, or add a Vercel Firewall rate limit on `/ask`, `/nudge`, `/voice/*` first; in-process limits don't work across serverless instances | Per-merchant quotas and provider budget alerts |
+| Conversation | One in-process history shared by all visitors (unused while no model is configured) | History keyed by authenticated session |
+| `/reset` | Anyone can clear the shared, ephemeral log | Scoped to the caller's session |
+| Storage | Ephemeral `/tmp` SQLite | Managed database with backups, encryption at rest, retention policy |

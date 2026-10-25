@@ -49,6 +49,10 @@ export function normalizeContext(raw) {
     out.lapsed_regulars = {
       count: lr.count,
       customers: rows(lr.customers, (c) => isStr(c.customer_id) && isStr(c.last_visit)) || [],
+      // The definition, when the server states it (null otherwise).
+      weeks: Number.isInteger(lr.weeks) ? lr.weeks : null,
+      regular_min_visits: Number.isInteger(lr.regular_min_visits) ? lr.regular_min_visits : null,
+      regular_min_span_days: Number.isInteger(lr.regular_min_span_days) ? lr.regular_min_span_days : null,
     };
   }
   const tt = raw.ticket_trend;
@@ -65,7 +69,12 @@ export function normalizeContext(raw) {
     for (const [name, d] of Object.entries(wp.days)) {
       if (isObj(d) && isNum(d.avg_daily_revenue) && Number.isInteger(d.days_in_window)) days[name] = d;
     }
-    out.weekday_profile = { weeks: wp.weeks, overall_avg_daily_revenue: wp.overall_avg_daily_revenue, days };
+    out.weekday_profile = {
+      weeks: wp.weeks,
+      overall_avg_daily_revenue: wp.overall_avg_daily_revenue,
+      trading_days: Number.isInteger(wp.trading_days) ? wp.trading_days : null,
+      days,
+    };
   }
   // An empty array is real data ("no rows"), distinct from a missing field.
   return out;
@@ -80,13 +89,14 @@ export function normalizeTrace(raw) {
       value: t.value === null || t.value === undefined ? "" : String(t.value),
       implication: isStr(t.implication) ? t.implication : "",
       source: isStr(t.source) ? t.source : "",
+      window: isStr(t.window) ? t.window : "",
       // An unrecognised level is shown as UNKNOWN: understating certainty is
       // the safe direction (mirrors backend/llm.py sanitize_trace).
       confidence: CONFIDENCE_LEVELS.includes(t.confidence) ? t.confidence : "UNKNOWN",
     }));
 }
 
-const ACTION_TEXT_FIELDS = ["observed", "unknown", "experiment", "measure", "basis"];
+const ACTION_TEXT_FIELDS = ["observed", "hypothesis", "experiment", "baseline", "measure", "confounders", "unknown", "basis"];
 
 export function normalizeAction(raw) {
   if (!isObj(raw) || !isStr(raw.priority) || !raw.priority) return null;

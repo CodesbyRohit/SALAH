@@ -72,7 +72,8 @@ CONTEXT_KEYS = (
     "weekday_profile",
 )
 TRACE_FIELDS = ("signal", "value", "implication", "source", "confidence")
-ACTION_FIELDS = ("priority", "observed", "unknown", "experiment", "measure", "basis", "weeks")
+ACTION_FIELDS = ("priority", "observed", "unknown", "experiment", "measure", "basis", "weeks",
+                 "hypothesis", "baseline", "confounders")
 
 REQUIRED_OUTPUT_KEYS = ("answer", "facts_used", "priority")
 OPTIONAL_OUTPUT_KEYS = ("caveats",)
@@ -98,6 +99,8 @@ R_UNSUPPORTED_NUMBER = "unsupported_number"
 R_UNSUPPORTED_CLAIM = "unsupported_claim"
 R_CAUSAL_UPGRADE = "causal_upgrade"
 R_INVENTED_CUSTOMER = "invented_customer"
+R_OUTCOME_CLAIM = "outcome_claim"
+R_UNSUPPORTED_DIRECTION = "unsupported_direction"
 
 SYSTEM_PROMPT = (
     "You are the EXPLANATION LAYER of 'Salah', a payments assistant for a small "
@@ -237,6 +240,7 @@ def sanitize_trace(trace: Any) -> tuple[list[dict], list[str]]:
             "implication": _clean_value(item.get("implication")),
             "source": _clean_value(item.get("source")),
             "confidence": confidence,
+            "window": _clean_value(item.get("window")),
         })
     if len(trace) > MAX_TRACE_ITEMS:
         warnings.append("trace_truncated")
@@ -244,7 +248,7 @@ def sanitize_trace(trace: Any) -> tuple[list[dict], list[str]]:
 
 
 def sanitize_action(action: Any) -> tuple[dict, list[str]]:
-    """Whitelist-copy the recommended action to its seven fields."""
+    """Whitelist-copy the recommended action to its ACTION_FIELDS."""
     warnings: list[str] = []
     if not isinstance(action, dict):
         return {"priority": "none"}, ["action_not_a_dict"]
@@ -339,6 +343,325 @@ _NEGATION_RE = re.compile(
     r"pas|aucun|aucune|inconnu|ne)\b",
     re.IGNORECASE,
 )
+
+# Outcome claims: SALAH records no experiment results, so a sentence that
+# says the suggested experiment already worked is unsupported by definition.
+# It needs an experiment word AND a completed-outcome phrase; hypothetical or
+# negated wording ("could bring them back", "has not worked yet") is allowed.
+_EXPERIMENT_RE = re.compile(
+    r"\b(experiment|test|tested|trial|offer|campaign|reactivation|win-back|attempt|"
+    r"change|suggestion|prayog|koshish|sujhav|"
+    r"experimento|prueba|oferta|campaña|campana|"
+    r"expérience|essai|offre|campagne)\b",
+    re.IGNORECASE,
+)
+_OUTCOME_RE = re.compile(
+    r"\b(worked|has worked|have worked|succeeded|was successful|were successful|paid off|"
+    r"brought (?:\w+ )?back|came back|have returned|has returned|increased|improved|"
+    r"boosted|raised|lifted|"
+    r"kaam kiya|kaam kar gaya|safal|wapas aa gaye|wapas aaye|badh gaya|badh gayi|"
+    r"funcionó|tuvo éxito|aumentó|mejoró|volvieron|"
+    r"a fonctionné|a réussi|a augmenté|a amélioré|sont revenus)\b",
+    re.IGNORECASE,
+)
+_HYPOTHETICAL_RE = re.compile(
+    r"\b(could|might|may|would|will|if|whether|can|should|expect|hope|"
+    r"sakta|sakti|sakte|shayad|agar|kya|"
+    r"podría|podrían|puede|si|"
+    r"pourrait|pourraient|peut)\b",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Directional claims ("went up", "fell", "below average", "the weakest day")
+# ---------------------------------------------------------------------------
+# Number checks prove a figure exists, not which way it moved: "the average
+# ticket increased from 31.06 to 35.1" uses two real numbers and reverses the
+# trend. Each directional claim is therefore checked against the deterministic
+# comparison that defines it, over that comparison's own period:
+#
+#   ticket     ticket_trend: the recent half of its window vs the half before
+#   weekday    weekday_profile: that weekday's per-trading-day average vs the
+#              overall average (payments per day when the sentence is about
+#              visits/payments); "lowest"/"highest" must name the min/max day
+#   customers  lapsed_regulars: regulars who stopped (supports only "fewer")
+#   revenue    the material has no period-over-period revenue comparison, so
+#              any directional revenue claim is unverifiable
+#
+# A claim is rejected when it contradicts its authority, when the authority is
+# missing or rounds to no change, when it names a period the comparison does
+# not cover, or when one sentence mixes subjects, weekdays or directions.
+# Hypothetical wording ("see whether visits improve") is a proposal, not a
+# claim, and is left alone.
+UP, DOWN, FLAT = "up", "down", "flat"
+
+# Devanagari letters and marks, excluding the danda punctuation (U+0964/5).
+_DEV = "\u0900-\u0963\u0966-\u097F"
+
+
+def _alt(latin: str, devanagari: tuple[str, ...] = ()) -> re.Pattern:
+    """Latin words on word boundaries; Devanagari words bounded by
+    non-Devanagari characters (\b is unreliable around Devanagari marks)."""
+    parts = [rf"\b(?:{latin})\b"] if latin else []
+    parts += [rf"(?<![{_DEV}]){w}(?![{_DEV}])" for w in devanagari]
+    return re.compile("|".join(parts), re.IGNORECASE)
+
+
+_CHANGE = {
+    UP: _alt(r"increased|increasing|increases|increase|rise|rises|rose|risen|rising|grow|grows|grew|grown|"
+             r"growing|gained|jumped|improve|improves|improved|improving|go up|goes up|went up|gone up|badha|badhi|badh gaya|badh gayi|"
+             r"aumentó|subió|creció|mejoró|a augmenté|augmenté|en hausse|a progressé",
+             ("बढ़ा", "बढ़ी", "बढ़ गया", "बढ़ गई")),
+    DOWN: _alt(r"decreased|decreasing|decreases|decrease|fall|falls|fell|fallen|falling|drop|drops|dropped|"
+               r"dropping|declined|declining|declines|decline|slip|slipped|slipping|shrank|worsen|worsened|"
+               r"go down|goes down|went down|gone down|"
+               r"ghata|ghati|ghat gaya|ghat gayi|gira|giri|"
+               r"disminuyó|bajó|cayó|a baissé|baissé|a diminué|diminué|en baisse",
+               ("घटा", "घटी", "गिरा", "गिरी", "घट गया", "घट गई")),
+}
+_LEVEL = {
+    UP: _alt(r"higher|above|stronger|mayor|más alto|más alta|supérieur|supérieure|plus élevé|plus élevée"),
+    DOWN: _alt(r"lower|below|weaker|fewer|kam|menor|más bajo|más baja|por debajo|inférieur|inférieure|"
+               r"plus bas|plus basse|en dessous", ("कम",)),
+}
+_SUPERLATIVE = {
+    UP: _alt(r"highest|strongest|best|busiest|sabse zyada|sabse accha|el más alto|la más alta|"
+             r"le plus élevé|la plus élevée|le meilleur", ("सबसे ज़्यादा", "सबसे अच्छा")),
+    DOWN: _alt(r"lowest|weakest|worst|slowest|sabse kam|sabse kamzor|el más bajo|la más baja|"
+               r"el más débil|le plus faible|la plus faible|le plus bas", ("सबसे कम", "सबसे कमजोर")),
+}
+_FLAT = _alt(r"unchanged|flat|stable|steady|the same|no change|barabar|sin cambios|estable|inchangé|inchangée",
+             ("बराबर", "स्थिर"))
+_KAM_SE_KAM = re.compile(rf"\bkam se kam\b|(?<![{_DEV}])कम से कम(?![{_DEV}])", re.IGNORECASE)
+
+_WEEKDAY_NAMES = {
+    "Monday": ("monday", "somwar", "somvar", "lunes", "lundi", "सोमवार"),
+    "Tuesday": ("tuesday", "mangalwar", "mangalvar", "martes", "mardi", "मंगलवार"),
+    "Wednesday": ("wednesday", "budhwar", "budhvar", "miércoles", "mercredi", "बुधवार"),
+    "Thursday": ("thursday", "guruwar", "guruvar", "jueves", "jeudi", "गुरुवार"),
+    "Friday": ("friday", "shukrawar", "shukravar", "viernes", "vendredi", "शुक्रवार"),
+    "Saturday": ("saturday", "shaniwar", "shanivar", "sábado", "samedi", "शनिवार"),
+    "Sunday": ("sunday", "raviwar", "ravivar", "itwar", "domingo", "dimanche", "रविवार"),
+}
+_WEEKDAY_RE = {
+    day: _alt("|".join(n for n in names if n.isascii() or not any("\u0900" <= c <= "\u097F" for c in n)),
+              tuple(n for n in names if any("\u0900" <= c <= "\u097F" for c in n)))
+    for day, names in _WEEKDAY_NAMES.items()
+}
+_SUBJECTS = {
+    "ticket": _alt(r"tickets?|basket|panier|spend per|average spend|kharch", ("टिकट",)),
+    "customers": _alt(r"customers?|regulars?|grahak|clientes?|clients?|habitués?|habituales?", ("ग्राहक",)),
+    "visits": _alt(r"visits?|footfall|transactions?|payments?|pagos?|paiements?", ("पेमेंट", "लेन-देन")),
+    "revenue": _alt(r"revenue|sales|earnings|income|kamai|kamaai|ingresos?|ventas?|revenus?|chiffre d'affaires",
+                    ("कमाई", "बिक्री")),
+}
+# Periods no deterministic comparison covers (single days/weeks/months).
+_SHORT_PERIOD = _alt(r"this week|last week|today|yesterday|this month|last month|is hafte|pichhle hafte|aaj|"
+                     r"esta semana|la semana pasada|hoy|ayer|este mes|cette semaine|la semaine dernière|"
+                     r"aujourd'hui|hier|ce mois",
+                     ("इस हफ्ते", "पिछले हफ्ते", "आज", "कल", "इस महीने"))
+_N_WEEKS = re.compile(r"(\d+)\s*(?:weeks?|hafte|haftey|semanas?|semaines?|हफ्ते|हफ्तों|सप्ताह)", re.IGNORECASE)
+_NUM = r"(\d[\d,]*(?:\.\d+)?)"
+_FROM_TO = [
+    re.compile(rf"\bfrom\s+(?:₹|rs\.?\s*)?{_NUM}\s+to\s+(?:₹|rs\.?\s*)?{_NUM}", re.IGNORECASE),
+    re.compile(rf"(?:₹)?{_NUM}\s*(?:se|से)\s+(?:₹)?{_NUM}", re.IGNORECASE),
+    re.compile(rf"\bde\s+(?:₹)?{_NUM}\s+(?:a|à)\s+(?:₹)?{_NUM}", re.IGNORECASE),
+]
+_NEAR_NEGATION = re.compile(r"\b(not|no|never|didn'?t|did not|hasn'?t|has not|nahi|nahin|na|ne|pas|sin)\b|नहीं",
+                            re.IGNORECASE)
+
+
+# Proposals are instructions, not claims: a labelled suggestion or
+# measurement step ("Suggestion: ...", "How to measure: ..."), or a sentence
+# that opens with an instruction verb ("Keep the other days unchanged").
+_PROPOSAL_LABEL = _alt(r"suggestion|sujhav|sugerencia|how to measure|kaise naapein|cómo medir|comment mesurer|"
+                       r"what you could try|next step", ("सुझाव", "कैसे मापें"))
+_IMPERATIVE_START = re.compile(
+    r"^\W*(?:run|test|try|hold|keep|compare|measure|offer|send|contact|check|ask|consider|start|track|"
+    r"karo|karein|kijiye|rakhein|rakho|dekhein|dekho|"
+    r"ejecuta|prueba|mantén|compara|mide|ofrece|"
+    r"lancez|testez|essayez|gardez|comparez|mesurez|proposez)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_proposal(sentence: str) -> bool:
+    if _HYPOTHETICAL_RE.search(sentence) or _PROPOSAL_LABEL.search(sentence):
+        return True
+    body = sentence.split(":", 1)[1] if ":" in sentence[:40] else sentence
+    return bool(_IMPERATIVE_START.search(body.strip()))
+
+
+def _compare(value: Any, reference: Any) -> str | None:
+    a, b = _as_number(value), _as_number(reference)
+    if a is None or b is None:
+        return None
+    return FLAT if a == b else (UP if a > b else DOWN)
+
+
+def direction_authorities(context: dict) -> dict:
+    """The deterministic comparisons a directional claim can be checked
+    against. Missing inputs give None: no direction is inferred."""
+    context = _as_dict(context)
+    tt = _as_dict(context.get("ticket_trend"))
+    change = _as_number(tt.get("change_pct"))
+    ticket = None
+    if change is not None and _as_number(tt.get("early_avg_ticket")) and _as_number(tt.get("recent_avg_ticket")) is not None:
+        # change_pct is rounded to 0.1: 0.0 means "no clear change".
+        ticket = FLAT if round(change, 1) == 0 else (UP if change > 0 else DOWN)
+    ticket_weeks = tt.get("weeks") if isinstance(tt.get("weeks"), int) and tt.get("weeks") > 0 else None
+
+    wp = _as_dict(context.get("weekday_profile"))
+    days = _as_dict(wp.get("days"))
+    weekdays = {}
+    for day, d in days.items():
+        d = _as_dict(d)
+        weekdays[day] = {
+            "revenue": _compare(d.get("avg_daily_revenue"), wp.get("overall_avg_daily_revenue")),
+            "visits": _compare(d.get("avg_tx_per_active_day"), wp.get("overall_avg_tx_per_active_day")),
+        }
+    averages = {day: _as_number(_as_dict(d).get("avg_daily_revenue")) for day, d in days.items()}
+    averages = {k: v for k, v in averages.items() if v is not None}
+
+    def unique_extreme(fn):
+        if len(averages) < 2:
+            return None
+        target = fn(averages.values())
+        hits = [k for k, v in averages.items() if v == target]
+        return hits[0] if len(hits) == 1 else None
+
+    lr = _as_dict(context.get("lapsed_regulars"))
+    count = _as_number(lr.get("count"))
+    week_window = wp.get("weeks") if isinstance(wp.get("weeks"), int) and wp.get("weeks") > 0 else None
+    return {
+        "ticket": ticket,
+        "ticket_periods": {ticket_weeks, ticket_weeks // 2} if ticket_weeks else set(),
+        "weekday": weekdays,
+        "weekday_min": unique_extreme(min),
+        "weekday_max": unique_extreme(max),
+        "weekday_periods": {week_window} if week_window else set(),
+        "customers": DOWN if count else None,
+        "customer_periods": {p for p in (lr.get("weeks"), LAPSE_WINDOW_WEEKS) if isinstance(p, int)},
+    }
+
+
+LAPSE_WINDOW_WEEKS = 8  # analytics.LAPSE_WEEKS: regulars are judged before the last 8 weeks
+
+
+def _claims(sentence: str) -> list[tuple[str, str, bool]]:
+    """(direction, kind, negated) for every directional word in the sentence."""
+    text = _KAM_SE_KAM.sub(" ", sentence)
+    found = []
+    groups = [("super", _SUPERLATIVE), ("level", _LEVEL), ("change", _CHANGE)]
+    taken: list[tuple[int, int]] = []
+    for kind, table in groups:
+        for direction, pattern in table.items():
+            for m in pattern.finditer(text):
+                if any(a <= m.start() < b for a, b in taken):
+                    continue  # "sabse kam" is a superlative, not also "kam"
+                taken.append((m.start(), m.end()))
+                window = text[max(0, m.start() - 24):m.start()] + " " + text[m.end():m.end() + 14]
+                found.append((direction, kind, bool(_NEAR_NEGATION.search(window))))
+    for m in _FLAT.finditer(text):
+        found.append((FLAT, "flat", False))
+    return found
+
+
+def _from_to_direction(sentence: str) -> str | None:
+    for pattern in _FROM_TO:
+        m = pattern.search(sentence)
+        if m:
+            try:
+                start, end = (float(g.replace(",", "")) for g in (m.group(1), m.group(2)))
+            except ValueError:
+                return None
+            return _compare(end, start)
+    return None
+
+
+def _agrees(claims: list[tuple[str, str, bool]], authority: str | None) -> bool:
+    if authority is None:
+        return False
+    for direction, _, negated in claims:
+        if negated and direction != FLAT:
+            if authority == direction:
+                return False
+        elif direction != authority:
+            return False
+    return True
+
+
+def direction_problem(sentence: str, auth: dict) -> str | None:
+    """Why a sentence's directional claim is unsupported, or None if it makes
+    no directional claim about a known metric or the claim checks out."""
+    if _is_proposal(sentence):
+        return None
+    claims = _claims(sentence)
+    implied = _from_to_direction(sentence)
+    if not claims and implied is None:
+        return None
+    asserted = {d for d, _, neg in claims if not neg}
+    if UP in asserted and DOWN in asserted:
+        return "mixed directions in one sentence"
+
+    named_days = [day for day, rx in _WEEKDAY_RE.items() if rx.search(sentence)]
+    subjects = {k for k, rx in _SUBJECTS.items() if rx.search(sentence)}
+    primary = (["weekday"] if named_days else []) + [k for k in ("ticket", "customers") if k in subjects]
+    weeks_named = {int(n) for n in _N_WEEKS.findall(sentence)}
+    short_period = bool(_SHORT_PERIOD.search(sentence))
+
+    if len(primary) > 1 or len(named_days) > 1:
+        return "claim mixes subjects; direction cannot be attributed"
+
+    if primary == ["weekday"]:
+        day = named_days[0]
+        if short_period or (weeks_named and not weeks_named <= auth["weekday_periods"]):
+            return f"{day}: period not covered by the weekday comparison"
+        supers = [c for c in claims if c[1] == "super"]
+        levels = [c for c in claims if c[1] in ("level", "flat")]
+        for direction, _, _ in supers:
+            expected = auth["weekday_min"] if direction == DOWN else auth["weekday_max"]
+            if expected != day:
+                return f"{day} is not the {'lowest' if direction == DOWN else 'highest'} weekday"
+        if levels:
+            measure = "visits" if "visits" in subjects else "revenue"
+            if not _agrees(levels, (auth["weekday"].get(day) or {}).get(measure)):
+                return f"{day} {measure} vs overall average contradicts or cannot support the claim"
+            return None
+        if supers:
+            return None
+        return f"{day}: no period-over-period comparison exists for a weekday"
+
+    if primary == ["ticket"]:
+        if "revenue" in subjects:
+            return "claim mixes ticket and revenue"
+        if short_period or (weeks_named and not weeks_named <= auth["ticket_periods"]):
+            return "average ticket: period not covered by the ticket comparison"
+        all_claims = [c for c in claims if c[1] != "super"]
+        if implied is not None:
+            all_claims.append((implied, "from_to", False))
+        if not all_claims:
+            return "average ticket: a superlative has no comparison to check against"
+        if not _agrees(all_claims, auth["ticket"]):
+            return f"average ticket direction is {auth['ticket'] or 'unknown'}"
+        return None
+
+    if primary == ["customers"]:
+        if "revenue" in subjects:
+            return "claim mixes customers and revenue"
+        if short_period or (weeks_named and not weeks_named <= auth["customer_periods"]):
+            return "customers: period not covered by the lapse definition"
+        comparable = [c for c in claims if c[1] != "super"]
+        if not comparable:
+            return "customers: a superlative has no comparison to check against"
+        if not _agrees(comparable, auth["customers"]):
+            return "only a decline in regular customers is supported"
+        return None
+
+    if claims and subjects & {"revenue", "visits"}:
+        return "no period-over-period revenue or visit comparison exists"
+    return None
+
 
 # Topics with no evidence anywhere in the deterministic material.
 _UNSUPPORTED_TOPICS = (
@@ -648,6 +971,12 @@ def validate_explanation(
             if marker and not _NEGATION_RE.search(sentence):
                 return _reject(R_CAUSAL_UPGRADE, sentence)
 
+    # --- no claims that the experiment already produced a result -------
+    for sentence in _sentences(projected_text):
+        if (_EXPERIMENT_RE.search(sentence) and _OUTCOME_RE.search(sentence)
+                and not _HYPOTHETICAL_RE.search(sentence) and not _NEGATION_RE.search(sentence)):
+            return _reject(R_OUTCOME_CLAIM, sentence)
+
     # --- no claims about topics the data does not contain ---------------
     material = json.dumps([context, trace, action], ensure_ascii=False).lower()
     for sentence in _sentences(projected_text):
@@ -655,6 +984,13 @@ def validate_explanation(
         for topic in _UNSUPPORTED_TOPICS:
             if topic in low and topic not in material and not _NEGATION_RE.search(sentence):
                 return _reject(R_UNSUPPORTED_CLAIM, topic)
+
+    # --- directional claims must match the deterministic comparison ----
+    authorities = direction_authorities(context)
+    for sentence in _sentences(projected_text):
+        problem = direction_problem(sentence, authorities)
+        if problem:
+            return _reject(R_UNSUPPORTED_DIRECTION, f"{problem}: {sentence}")
 
     payload = {
         "answer": answer,

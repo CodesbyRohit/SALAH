@@ -91,7 +91,8 @@ class InsightsContractTests(_ClientCase):
             self.assertIn(item["confidence"], llm.CONFIDENCE_LEVELS)
 
     def test_insights_failure_is_an_honest_500(self):
-        with mock.patch.object(main.analytics, "build_merchant_context", side_effect=RuntimeError("no db")):
+        with mock.patch.object(main.analytics, "build_merchant_context", side_effect=RuntimeError("no db")), \
+                self.assertLogs("salah", level="ERROR"):
             res = self.client.get("/insights")
         self.assertEqual(res.status_code, 500)
 
@@ -225,6 +226,38 @@ class VoiceAndResetContractTests(_ClientCase):
         res = self.client.post("/voice/tts", json={"text": " ", "language": "en"})
         self.assertEqual(res.status_code, 400)
 
+    # Voice is forwarded to a paid API: oversized or non-audio requests must
+    # be refused before any provider call, even when a key is configured.
+    def test_stt_rejects_non_audio_uploads_before_calling_the_provider(self):
+        with mock.patch.dict(os.environ, {"SARVAM_API_KEY": "k"}), \
+                mock.patch.object(main.requests, "post") as post:
+            res = self.client.post("/voice/stt", files={"file": ("a.txt", b"hello", "text/plain")})
+        self.assertEqual(res.status_code, 415)
+        post.assert_not_called()
+
+    def test_stt_rejects_oversized_audio_before_calling_the_provider(self):
+        big = b"\0" * (main.MAX_AUDIO_BYTES + 1)
+        with mock.patch.dict(os.environ, {"SARVAM_API_KEY": "k"}), \
+                mock.patch.object(main.requests, "post") as post:
+            res = self.client.post("/voice/stt", files={"file": ("a.webm", big, "audio/webm")})
+        self.assertEqual(res.status_code, 413)
+        post.assert_not_called()
+
+    def test_tts_rejects_overlong_text_before_calling_the_provider(self):
+        with mock.patch.dict(os.environ, {"SARVAM_API_KEY": "k"}), \
+                mock.patch.object(main.requests, "post") as post:
+            res = self.client.post("/voice/tts", json={"text": "a" * (main.MAX_TTS_CHARS + 1), "language": "en"})
+        self.assertEqual(res.status_code, 413)
+        post.assert_not_called()
+
+    def test_cross_origin_requests_get_no_cors_grant_by_default(self):
+        res = self.client.get("/api/health", headers={"Origin": "https://evil.example"})
+        self.assertEqual(res.status_code, 200)
+        self.assertNotIn("access-control-allow-origin", res.headers)
+        pre = self.client.options("/ask", headers={"Origin": "https://evil.example",
+                                                   "Access-Control-Request-Method": "POST"})
+        self.assertNotIn("access-control-allow-origin", pre.headers)
+
     def test_reset_clears_conversation(self):
         main.conversation_history.append({"role": "user", "text": "x"})
         res = self.client.post("/reset")
@@ -262,6 +295,15 @@ class FrontendServingTests(_ClientCase):
         res = self.client.get("/vendor/three/three.module.min.js", headers={"Accept-Encoding": "gzip"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.headers.get("content-encoding"), "gzip")
+
+    def test_static_files_are_edge_cacheable_but_api_responses_are_not(self):
+        for path in ("/", "/js/app.js", "/vendor/three/three.module.min.js"):
+            cc = self.client.get(path).headers.get("cache-control", "")
+            self.assertIn("s-maxage=", cc, path)
+            self.assertIn("max-age=0", cc, path)  # browsers still revalidate
+        for path in ("/api/health", "/context", "/insights"):
+            self.assertNotIn("s-maxage", self.client.get(path).headers.get("cache-control", ""), path)
+        self.assertNotIn("s-maxage", self.client.get("/no-such-file.js").headers.get("cache-control", ""))
 
     def test_api_routes_are_not_shadowed_by_static_mount(self):
         self.assertEqual(self.client.get("/api/health").status_code, 200)

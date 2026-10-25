@@ -40,12 +40,18 @@ app = FastAPI(
     version="0.1.0",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The frontend is served by this app (same origin), so browsers need no
+# cross-origin access. Allowing any origin let any website spend this API
+# (including a configured paid model) from its visitors' browsers.
+# SALAH_CORS_ORIGINS, a comma-separated list, opts specific origins in.
+CORS_ORIGINS = [o.strip() for o in os.getenv("SALAH_CORS_ORIGINS", "").split(",") if o.strip()]
+if CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ORIGINS,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+    )
 
 # Compress text responses (the frontend ships an unbundled Three.js module).
 app.add_middleware(GZipMiddleware, minimum_size=1024)
@@ -56,6 +62,10 @@ log = logging.getLogger("salah")
 
 MAX_HISTORY_ITEMS = 20
 MAX_QUESTION_LENGTH = 1000
+# Voice requests are forwarded to a paid API: bound what one request can send.
+# 60 s of browser-recorded Opus audio is well under 1 MB.
+MAX_AUDIO_BYTES = 5 * 1024 * 1024
+MAX_TTS_CHARS = 2500
 
 conversation_history: list[dict] = []
 
@@ -426,7 +436,19 @@ def nudge(req: NudgeRequest):
 @app.post("/voice/stt")
 async def voice_stt(file: UploadFile = File(...)):
     """Transcribe uploaded audio using Sarvam STT."""
-    audio = await file.read()
+    if not (file.content_type or "").lower().startswith("audio/"):
+        raise HTTPException(
+            status_code=415,
+            detail="Upload must be an audio file",
+        )
+
+    audio = await file.read(MAX_AUDIO_BYTES + 1)
+
+    if len(audio) > MAX_AUDIO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="Audio file too large",
+        )
 
     if not audio:
         raise HTTPException(
@@ -459,6 +481,12 @@ def voice_tts(payload: dict):
         raise HTTPException(
             status_code=400,
             detail="empty text",
+        )
+
+    if len(text) > MAX_TTS_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail="Text too long to read aloud",
         )
 
     audio = sarvam_tts(
@@ -495,10 +523,25 @@ def reset():
 # Frontend
 # ---------------------------------------------------------------------------
 
+# Static files only change with a deployment. s-maxage lets a CDN in front of
+# the app (Vercel's edge) serve them near the user instead of forwarding every
+# asset to the function; max-age=0 keeps browsers revalidating, so a new
+# deployment is picked up on the next load. API responses are not affected.
+STATIC_CACHE_CONTROL = "public, max-age=0, s-maxage=86400, stale-while-revalidate=300"
+
+
+class FrontendFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 304):
+            response.headers["Cache-Control"] = STATIC_CACHE_CONTROL
+        return response
+
+
 if FRONTEND_DIR.exists():
     app.mount(
         "/",
-        StaticFiles(
+        FrontendFiles(
             directory=str(FRONTEND_DIR),
             html=True,
         ),

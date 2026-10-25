@@ -64,6 +64,16 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _day_window_start(end: datetime, weeks: int) -> datetime:
+    """Start of the trailing window for PER-DAY averages: the first midnight at
+    or after ``end - weeks``. The plain window starts at the data end's clock
+    time (e.g. 16:45), so its first calendar day is only a few hours long and
+    would be averaged as if it were a whole trading day."""
+    start = end - timedelta(weeks=weeks)
+    midnight = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight if midnight == start else midnight + timedelta(days=1)
+
+
 def _pre_lapse_start(data_end: datetime) -> datetime:
     """Start of the pre-lapse window: everything before the final 8 weeks."""
     return data_end - timedelta(weeks=LAPSE_WEEKS)
@@ -109,9 +119,10 @@ def revenue_by_hour(weeks: int = 8) -> list[dict]:
 
 
 def weakest_weekday(weeks: int = 8) -> dict:
-    """Weekday with lowest average daily revenue over the trailing window."""
+    """Weekday with lowest average revenue per trading day (a day with at
+    least one payment) over the trailing window's whole days."""
     end = get_data_end()
-    start = end - timedelta(weeks=weeks)
+    start = _day_window_start(end, weeks)
     conn = get_conn()
     rows = conn.execute(
         "SELECT ts, amount FROM transactions WHERE ts >= ?", (_iso(start),)
@@ -170,6 +181,9 @@ def lapsed_regulars(weeks: int = 4) -> dict:
     end = get_data_end()
     cutoff = end - timedelta(weeks=weeks)
     regulars = get_regulars(end)
+    # The definition travels with the result so the UI can state it.
+    definition = {"weeks": weeks, "regular_min_visits": REGULAR_MIN_VISITS,
+                  "regular_min_span_days": REGULAR_MIN_SPAN_DAYS}
     conn = get_conn()
     rows = conn.execute(
         "SELECT customer_id, MAX(ts) AS last_ts FROM transactions GROUP BY customer_id"
@@ -182,7 +196,7 @@ def lapsed_regulars(weeks: int = 4) -> dict:
             if last < cutoff:
                 lapsed.append({"customer_id": r["customer_id"], "last_visit": r["last_ts"]})
     lapsed.sort(key=lambda x: x["last_visit"])
-    return {"count": len(lapsed), "customers": lapsed}
+    return {"count": len(lapsed), "customers": lapsed, **definition}
 
 
 def ticket_trend(weeks: int = 12) -> dict:
@@ -206,6 +220,7 @@ def ticket_trend(weeks: int = 12) -> dict:
         "early_avg_ticket": round(early, 2),
         "recent_avg_ticket": round(recent, 2),
         "change_pct": round(change_pct, 1),
+        "weeks": weeks,  # recent = last weeks/2, early = the weeks/2 before
     }
 
 
@@ -226,7 +241,7 @@ def evening_share(weeks: int = 8) -> dict:
     conn.close()
     share = (evening / total * 100) if total else 0.0
     return {"evening_revenue": round(evening, 2), "total_revenue": round(total, 2),
-            "evening_share_pct": round(share, 1)}
+            "evening_share_pct": round(share, 1), "weeks": weeks}
 
 
 def weekday_profile(weeks: int = 8) -> dict:
@@ -236,10 +251,15 @@ def weekday_profile(weeks: int = 8) -> dict:
     days in the window fell below the overall daily average, the average gap
     on below-average days, and the average transaction count per active day.
 
+    Averages are per trading day: a day with at least one payment, inside the
+    window's whole days (see _day_window_start). Payment data cannot tell a
+    closed day from a day without sales, so days without payments are left
+    out rather than counted as zero.
+
     NOTE: only weekdays that actually occur in the window are present in
     ``days_seen``; a short window (e.g. 2 weeks) sees fewer occurrences."""
     end = get_data_end()
-    start = end - timedelta(weeks=weeks)
+    start = _day_window_start(end, weeks)
     conn = get_conn()
     rows = conn.execute(
         "SELECT ts, amount FROM transactions WHERE ts >= ?", (_iso(start),)
@@ -252,6 +272,7 @@ def weekday_profile(weeks: int = 8) -> dict:
         rev_by_day[d] = rev_by_day.get(d, 0.0) + r["amount"]
         cnt_by_day[d] = cnt_by_day.get(d, 0) + 1
     overall = (sum(rev_by_day.values()) / len(rev_by_day)) if rev_by_day else 0.0
+    overall_tx = (sum(cnt_by_day.values()) / len(cnt_by_day)) if cnt_by_day else 0.0
     per_wd: dict[int, list[float]] = {i: [] for i in range(7)}
     cnt_per_wd: dict[int, list[float]] = {i: [] for i in range(7)}
     for d, rev in rev_by_day.items():
@@ -273,7 +294,9 @@ def weekday_profile(weeks: int = 8) -> dict:
                 if below else 0.0, 1),
             "avg_tx_per_active_day": round(sum(cnt_per_wd[wd]) / len(cnt_per_wd[wd]), 1),
         }
-    return {"weeks": weeks, "overall_avg_daily_revenue": round(overall, 2), "days": days_seen}
+    return {"weeks": weeks, "overall_avg_daily_revenue": round(overall, 2),
+            "overall_avg_tx_per_active_day": round(overall_tx, 1),
+            "trading_days": len(rev_by_day), "days": days_seen}
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +342,19 @@ def _action_lapsed(lr: dict) -> dict:
             "How many of the lapsed customers transact again within 4 weeks, "
             "versus return rate in the unchanged control group."
         ),
+        "hypothesis": (
+            "A direct reactivation attempt brings some lapsed regulars back "
+            "sooner than they would return on their own."
+        ),
+        "baseline": (
+            f"None of the {n} have paid in the last 4 weeks; the control "
+            "group's return rate over the same 4 weeks is the comparison."
+        ),
+        "confounders": (
+            f"With only {n} customers, one or two returns can swing the rate. "
+            "Festivals, holidays and any other change made in the same weeks "
+            "also affect whether customers come back."
+        ),
         "basis": f"lapsed_regulars ({n} customers, trailing-4-weeks silence)",
         "weeks": 4,
     }
@@ -346,6 +382,16 @@ def _action_weak_weekday(ww: dict, wp: dict) -> dict:
             f"Average daily revenue on the tested {day}s versus the recent "
             f"{day} baseline of {weak['avg_daily_revenue']}."
         ),
+        "hypothesis": f"A merchant-controlled change on {day}s raises {day} revenue.",
+        "baseline": (
+            f"{day} averaged {weak['avg_daily_revenue']} per trading day over "
+            f"the last {weak['days_in_window']} {day}s with payments."
+        ),
+        "confounders": (
+            f"Only 2-4 {day}s will be tested, so one unusual day moves the "
+            "result. Holidays and any other change made in the same weeks "
+            "also affect it."
+        ),
         "basis": f"weakest_weekday + weekday_profile (gap {weak['avg_gap_on_below_days_pct']}% on below-average days)",
         "weeks": 4,
     }
@@ -369,6 +415,12 @@ def _action_ticket_decline(tt: dict) -> dict:
         "measure": (
             f"Average ticket versus the recent baseline of {tt['recent_avg_ticket']} "
             "over the next 2 weeks."
+        ),
+        "hypothesis": "A paired-item offer raises the average amount per payment.",
+        "baseline": f"Average ticket of {tt['recent_avg_ticket']} in the recent half of the window.",
+        "confounders": (
+            "Seasonal spending, new items and a change in which customers "
+            "visit all move the average ticket too."
         ),
         "basis": f"ticket_trend ({tt['change_pct']}% change over trailing 12 weeks)",
         "weeks": 2,
@@ -424,52 +476,65 @@ def build_trace(merchant_context: dict) -> list[dict]:
     items only appear when the context itself contains the grounding
     evidence, and are always framed as possible, not established."""
     trace: list[dict] = []
+    end_date = str(merchant_context.get("generated_at") or "")[:10] or "the data end"
+    wp = merchant_context.get("weekday_profile") or {}
+    weeks_field = wp.get("weeks")
+    window_weeks = weeks_field if isinstance(weeks_field, int) and weeks_field > 0 else None
 
-    def add(signal: str, value, implication: str, source: str, confidence: str):
+    def add(signal: str, value, implication: str, source: str, confidence: str, window: str = ""):
         trace.append({
             "signal": signal,
             "value": value,
             "implication": implication,
             "source": source,
             "confidence": confidence,
+            "window": window,  # period and sample the item is computed over
         })
 
-    # 1. Weekly revenue — raw observed numbers.
+    def weeks_to_end(weeks) -> str:
+        return f"{weeks} weeks to {end_date}" if weeks else f"trailing window to {end_date}"
+
+    # 1. Weekly revenue — raw observed numbers. The rows are calendar-week
+    # buckets (the first usually partial), so the average divides by the
+    # window length, not the row count.
     wr = merchant_context.get("weekly_revenue") or []
     if wr:
         total = round(sum(w["revenue"] for w in wr), 2)
-        vals = [w["revenue"] for w in wr]
-        avg = round(total / len(wr), 2)
-        add("weekly_revenue",
-            f"{len(wr)} weeks tracked, total {total}, avg {avg}/week",
+        value = (f"total {total} over {window_weeks} weeks, avg {round(total / window_weeks, 2)}/week"
+                 if window_weeks else f"total {total} in the trailing window")
+        add("weekly_revenue", value,
             "Baseline revenue level for the trailing window.",
-            "weekly_revenue", "FACT")
+            "weekly_revenue", "FACT",
+            f"{weeks_to_end(window_weeks)}; shown as {len(wr)} calendar weeks, the first partial")
 
     # 2. Weak weekday — level is fact; recurrence is pattern; cause unknown.
     ww = merchant_context.get("weakest_weekday") or {}
-    wp = merchant_context.get("weekday_profile") or {}
     day = ww.get("weekday")
     if day:
         weak = (wp.get("days") or {}).get(day, {})
+        trading = wp.get("trading_days")
+        day_window = weeks_to_end(window_weeks) + (f"; {trading} trading days" if trading else "")
         gap = _pct_of_average(ww.get("avg_daily_revenue", 0.0),
                               ww.get("overall_avg_daily_revenue", 0.0))
         add("weak_weekday_level",
-            f"{day} averages {ww.get('avg_daily_revenue')} vs overall {ww.get('overall_avg_daily_revenue')} daily ({gap}% of average)",
+            f"{day} averages {ww.get('avg_daily_revenue')} vs overall {ww.get('overall_avg_daily_revenue')} per trading day ({gap}% of average)",
             f"{day} is the weakest weekday in the trailing window.",
-            "weakest_weekday", "FACT")
+            "weakest_weekday", "FACT", day_window)
         if weak:
-            recurrence = weak["below_avg_days"] / weak["days_in_window"] if weak["days_in_window"] else 0.0
+            weak_window = f"{weeks_to_end(window_weeks)}; {weak['days_in_window']} {day}s with payments"
             add("weak_weekday_recurrence",
                 f"{weak['below_avg_days']} of {weak['days_in_window']} recent {day}s below overall daily average (gap {weak['avg_gap_on_below_days_pct']}% on those days)",
                 f"The {day} shortfall recurs across independent weeks rather than being one bad day.",
-                "weekday_profile", "PATTERN")
-            if weak.get("avg_tx_per_active_day") is not None and weak["avg_tx_per_active_day"] > 0:
-                overall_tx = _overall_tx_hint(merchant_context)
-                if overall_tx:
-                    add("weak_weekday_transaction_count",
-                        f"{day} averages {weak['avg_tx_per_active_day']} transactions per active day",
-                        "Fewer transactions on this weekday point to fewer visits rather than smaller tickets — possible, not established.",
-                        "weekday_profile", "HYPOTHESIS")
+                "weekday_profile", "PATTERN", weak_window)
+            # Only a hypothesis when the comparison actually holds: the weak
+            # day must have fewer payments per trading day than the overall.
+            weak_tx = weak.get("avg_tx_per_active_day")
+            overall_tx = _overall_tx_hint(merchant_context)
+            if weak_tx and overall_tx and weak_tx < overall_tx:
+                add("weak_weekday_transaction_count",
+                    f"{day} averages {weak_tx} payments per trading day vs {overall_tx} overall",
+                    "Fewer transactions on this weekday point to fewer visits rather than smaller tickets — possible, not established.",
+                    "weekday_profile", "HYPOTHESIS", weak_window)
             add("weak_weekday_cause", "not determinable from payment data",
                 f"Payment data shows when revenue dips, not why.",
                 "weakest_weekday", "UNKNOWN")
@@ -479,10 +544,14 @@ def build_trace(merchant_context: dict) -> list[dict]:
     if lr.get("count", 0) > 0:
         custs = lr.get("customers") or []
         most_recent = custs[-1]["last_visit"] if custs else None
+        silent = lr.get("weeks") or 4
+        rule = (f"regular = {lr['regular_min_visits']}+ payments over {lr['regular_min_span_days']}+ days "
+                f"before the last {LAPSE_WEEKS} weeks; " if lr.get("regular_min_visits") else "")
         add("lapsed_regulars",
-            f"{lr['count']} previously regular customers silent for 4+ weeks (most recent visit {most_recent})",
+            f"{lr['count']} previously regular customers silent for {silent}+ weeks (most recent visit {most_recent})",
             "A known group of repeat visitors has stopped transacting.",
-            "lapsed_regulars", "FACT")
+            "lapsed_regulars", "FACT",
+            f"{rule}lapsed = no payment in the {silent} weeks to {end_date}")
         add("lapse_reason", "not determinable from payment data",
             "Why they stopped is not recorded in the data.",
             "lapsed_regulars", "UNKNOWN")
@@ -491,10 +560,12 @@ def build_trace(merchant_context: dict) -> list[dict]:
     tt = merchant_context.get("ticket_trend") or {}
     if tt:
         direction = "decline" if tt.get("change_pct", 0) < 0 else "increase" if tt.get("change_pct", 0) > 0 else "no change"
+        half = tt["weeks"] // 2 if isinstance(tt.get("weeks"), int) else None
         add("ticket_trend",
             f"Average ticket {tt.get('early_avg_ticket')} -> {tt.get('recent_avg_ticket')} ({tt.get('change_pct')}%, {direction})",
             "Observed shift in spend per transaction across the window.",
-            "ticket_trend", "FACT")
+            "ticket_trend", "FACT",
+            f"last {half} weeks to {end_date} vs the {half} weeks before" if half else weeks_to_end(None))
         add("ticket_trend_driver", "not determinable from payment data",
             "Whether fewer items, cheaper items, or different customers drove this is not recorded.",
             "ticket_trend", "UNKNOWN")
@@ -505,18 +576,21 @@ def build_trace(merchant_context: dict) -> list[dict]:
         add("evening_share",
             f"{es.get('evening_share_pct')}% of revenue between 18:00-22:00 ({es.get('evening_revenue')} of {es.get('total_revenue')})",
             "Revenue concentrates in evening hours in the trailing window.",
-            "evening_share", "FACT")
+            "evening_share", "FACT", weeks_to_end(es.get("weeks")))
 
     return trace
 
 
 def _overall_tx_hint(merchant_context: dict) -> float | None:
-    """Non-zero average transactions/day across the window, or None.
-    Derived from context fields only; used to sanity-check the HYPOTHESIS."""
+    """Average payments per trading day across the window, or None.
+    Derived from context fields only; used to ground the HYPOTHESIS."""
     wp = merchant_context.get("weekday_profile") or {}
+    overall = wp.get("overall_avg_tx_per_active_day")
+    if isinstance(overall, (int, float)) and overall > 0:
+        return overall
     vals = [d["avg_tx_per_active_day"] for d in (wp.get("days") or {}).values()
             if d.get("avg_tx_per_active_day")]
-    return (sum(vals) / len(vals)) if vals else None
+    return round(sum(vals) / len(vals), 1) if vals else None
 
 
 def build_merchant_context() -> dict:

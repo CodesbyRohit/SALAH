@@ -258,6 +258,38 @@ def suite(run: Run, ctx: dict, ins: dict):
         run.shot(page, "evidence-desktop")
     _()
 
+    @check("KPI subtitles state their period and definition")
+    def _():
+        run.ready(page)
+        subs = page.locator(".kpi__sub").all_inner_texts()
+        joined = " | ".join(subs)
+        tt, es, lr = ctx["ticket_trend"], ctx["evening_share"], ctx["lapsed_regulars"]
+        assert f"Last {tt['weeks'] // 2} weeks" in joined, subs
+        assert f"of {es['weeks']}-week revenue" in joined, subs
+        assert "per trading day" in joined, subs
+        rule = f"{lr['regular_min_visits']}+ payments over {lr['regular_min_span_days']}+ days, then none for {lr['weeks']} weeks"
+        assert rule in joined, subs
+        expect(page.locator(".q-card__measure")).to_contain_text("How to judge it")
+    _()
+
+    @check("evidence states each signal's period; experiment plan is complete and only 'Proposed'")
+    def _():
+        page.goto(f"{run.base}/#/evidence")
+        first = page.locator(".trace-row").first
+        expect(first).to_contain_text("959.62")
+        assert "853" not in first.inner_text()
+        first.locator("summary").click()
+        expect(first.locator(".trace-row__detail")).to_contain_text("Period and sample")
+        expect(first.locator(".trace-row__detail")).to_contain_text(f"8 weeks to {ctx['generated_at'][:10]}")
+        rec = page.locator(".rec")
+        for label in ("Hypothesis to test", "Baseline", "How to judge it", "What else could move the result"):
+            expect(rec).to_contain_text(label)
+        expect(rec).to_contain_text(ins["action"]["baseline"][:40])
+        current = page.locator(".rec__stage[aria-current='step']")
+        expect(current).to_have_count(1)
+        expect(current).to_have_text("Proposed")
+    _()
+
     @check("copilot answers via real /ask with source and fallback reason shown")
     def _():
         page.goto(f"{run.base}/#/copilot")
@@ -471,12 +503,34 @@ def suite(run: Run, ctx: dict, ins: dict):
         vpage.route("**/voice/stt", lambda r: r.fulfill(status=503, content_type="application/json", body='{"detail":"STT unavailable"}'))
         mic = vpage.locator(".icon-btn--mic")
         mic.click()
+        # Time the recording from when it starts, not from the click: under
+        # load the permission step alone can take most of a second, which
+        # left a near-empty clip ("No speech was captured") intermittently.
+        expect(vpage.locator(".voice-bar[data-state='recording']")).to_be_visible()
         vpage.wait_for_timeout(1200)
         mic.click()
         expect(vpage.locator(".voice-bar[data-state='error']")).to_contain_text("STT unavailable")
         vpage.allow_http_errors = False
     _()
     vpage.context.close()
+
+    @check("data load failure: honest error panel, no numbers, retry recovers")
+    def _():
+        pg = run.page()
+        pg.allow_http_errors = True
+        pg.route("**/context", lambda r: r.fulfill(status=503, content_type="application/json",
+                                                   body='{"detail":"Merchant data unavailable: test"}'))
+        pg.goto(f"{run.base}/#/overview")
+        err = pg.locator(".error-panel, [role='alert']").first
+        expect(err).to_contain_text("Couldn't load merchant data")
+        expect(err).to_contain_text("503")
+        assert pg.locator(".kpi__value").count() == 0, "numbers shown despite failed load"
+        pg.unroute("**/context")
+        pg.allow_http_errors = False
+        pg.get_by_role("button", name="Retry").first.click()
+        expect(pg.locator(".kpi__value").first).to_have_text("₹7,677")
+        pg.context.close()
+    _()
 
     # --- rendering modes ------------------------------------------------------
     @check("reduced motion: 3D renders a single static frame")
@@ -519,7 +573,7 @@ def suite(run: Run, ctx: dict, ins: dict):
     _()
 
     # --- responsive layouts -----------------------------------------------------
-    for w, h in [(360, 740), (390, 844), (768, 1024), (1280, 800), (1440, 900)]:
+    for w, h in [(320, 640), (360, 740), (390, 844), (768, 1024), (1280, 800), (1440, 900)]:
         @check(f"responsive {w}px: no horizontal overflow on any view")
         def _(w=w, h=h):
             pg = run.page(viewport=(w, h))
@@ -529,7 +583,7 @@ def suite(run: Run, ctx: dict, ins: dict):
                 pg.wait_for_timeout(350)
                 sw, iw = pg.evaluate("[document.documentElement.scrollWidth, window.innerWidth]")
                 assert sw <= iw, f"{view}: scrollWidth {sw} > {iw}"
-                if view in ("overview", "copilot") and w in (390, 768):
+                if view in ("overview", "evidence", "copilot") and w in (320, 390, 768):
                     run.shot(pg, f"{view}-{w}")
             if w <= 760:
                 expect(pg.locator(".tabbar")).to_be_visible()
