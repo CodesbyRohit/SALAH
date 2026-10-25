@@ -12,6 +12,7 @@ import requests
 import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -43,6 +44,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Compress text responses (the frontend ships an unbundled Three.js module).
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
@@ -202,6 +206,11 @@ def health():
         "llm_available": llm.llm_available(),
         "memory": memory.status(),
         "cache_entries": demo_cache.cache_size(),
+        "voice": {
+            "available": bool(get_sarvam_key()),
+            "languages": sorted(SARVAM_LANG_MAP),
+        },
+        "languages": SUPPORTED_LANGUAGES,
         "time": datetime.now().isoformat(),
     }
 
@@ -215,6 +224,27 @@ def context():
         raise HTTPException(
             status_code=500,
             detail=f"Failed to build merchant context: {exc}",
+        ) from exc
+
+
+@app.get("/insights")
+def insights():
+    """Return the deterministic evidence trace and recommended experiment.
+
+    Both come straight from analytics.py (no LLM), so the frontend can show
+    the evidence behind SALAH's recommendation before any question is asked.
+    """
+    try:
+        merchant_context = analytics.build_merchant_context()
+        return {
+            "generated_at": merchant_context.get("generated_at"),
+            "trace": analytics.build_trace(merchant_context),
+            "action": analytics.get_recommended_action(merchant_context),
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to build merchant insights: {exc}",
         ) from exc
 
 
@@ -238,6 +268,9 @@ def ask(req: AskRequest):
         merchant_context = {}
 
     trace = None
+    action = None
+    source = "cache"
+    fallback_reason = None
 
     # Cache-first for scripted/demo questions.
     cached = demo_cache.get_cached(
@@ -259,8 +292,12 @@ def ask(req: AskRequest):
 
         answer = recommendation.get("answer") or ""
         trace = recommendation.get("trace")
+        action = recommendation.get("action")
+        source = recommendation.get("source") or "deterministic"
+        fallback_reason = recommendation.get("fallback_reason")
 
         if not answer:
+            source = "deterministic"
             answer = llm.deterministic_explanation(
                 merchant_context,
                 [],
@@ -296,6 +333,9 @@ def ask(req: AskRequest):
     return {
         "answer": answer,
         "trace": trace,
+        "action": action,
+        "source": source,
+        "fallback_reason": fallback_reason,
         "language": language,
     }
 

@@ -1,538 +1,125 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en" data-render="loading" data-route="overview">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title id="docTitle">Salah — AI Financial Copilot</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    background: #0f1117;
-    color: #e8eaf0;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 20px;
-  }
-  header {
-    text-align: center;
-    margin-bottom: 16px;
-    width: 100%;
-    max-width: 760px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-  .header-top {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    width: 100%;
-    flex-wrap: wrap;
-  }
-  header h1 { font-size: 1.6rem; letter-spacing: 1px; }
-  .lang-select {
-    background: #181b24;
-    border: 1px solid #262a36;
-    color: #e8eaf0;
-    padding: 6px 12px;
-    font-size: 0.85rem;
-    border-radius: 8px;
-    cursor: pointer;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  .lang-select:focus, .lang-select:hover { border-color: #2b4a8f; }
-  header p { color: #9aa0b0; font-size: 0.9rem; margin-top: 6px; }
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 12px;
-    width: 100%;
-    max-width: 760px;
-    margin-bottom: 16px;
-  }
-  .card {
-    background: #181b24;
-    border: 1px solid #262a36;
-    border-radius: 12px;
-    padding: 14px;
-  }
-  .card .label { color: #9aa0b0; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px; }
-  .card .value { font-size: 1.35rem; font-weight: 700; margin-top: 6px; }
-  .card .sub { color: #7c8296; font-size: 0.72rem; margin-top: 4px; }
-  .chat {
-    width: 100%;
-    max-width: 760px;
-    background: #181b24;
-    border: 1px solid #262a36;
-    border-radius: 12px;
-    display: flex;
-    flex-direction: column;
-    height: 380px;
-    margin-bottom: 12px;
-  }
-  #messages { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-  .msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; font-size: 0.95rem; white-space: pre-wrap; }
-  .msg.user { align-self: flex-end; background: #2b4a8f; }
-  .msg.assistant { align-self: flex-start; background: #232733; }
-  .controls {
-    width: 100%;
-    max-width: 760px;
-    display: flex;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-  #input {
-    flex: 1;
-    background: #181b24;
-    border: 1px solid #262a36;
-    border-radius: 10px;
-    color: #e8eaf0;
-    padding: 12px 14px;
-    font-size: 0.95rem;
-    outline: none;
-  }
-  button {
-    background: #2b4a8f;
-    color: #fff;
-    border: none;
-    border-radius: 10px;
-    padding: 12px 18px;
-    font-size: 0.9rem;
-    cursor: pointer;
-  }
-  button:hover { filter: brightness(1.15); }
-  button:disabled { opacity: 0.5; cursor: default; }
-  button.mic { background: #1f6f43; }
-  button.ghost { background: transparent; border: 1px solid #3a3f4f; color: #9aa0b0; }
-  #tracePanel {
-    width: 100%;
-    max-width: 760px;
-    background: #12141b;
-    border: 1px dashed #3a3f4f;
-    border-radius: 12px;
-    padding: 14px;
-    font-family: 'Consolas', monospace;
-    font-size: 0.78rem;
-    color: #9aa0b0;
-    min-height: 60px;
-  }
-  #tracePanel h3 { font-family: 'Segoe UI', sans-serif; font-size: 0.8rem; color: #c7cbd6; margin-bottom: 8px; }
-  .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.68rem; font-weight: 700; margin-right: 6px; }
-  .badge.FACT { background: #1f4d2e; color: #7ee2a0; }
-  .badge.PATTERN { background: #4d3a12; color: #e8c26a; }
-  .badge.HYPOTHESIS { background: #12384d; color: #6ac6e8; }
-  .badge.UNKNOWN { background: #3a3f4f; color: #b0b5c2; }
-  .status { color: #6c7284; font-size: 0.75rem; text-align: center; height: 16px; margin-bottom: 6px; }
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#040605">
+  <meta name="description" content="SALAH — a voice-first, evidence-backed business advisor for small Indian merchants. Runs on synthetic demonstration data.">
+  <title>SALAH — Merchant intelligence</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23040605'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%233ddc97'/%3E%3Ccircle cx='16' cy='16' r='10.5' fill='none' stroke='%233ddc97' stroke-opacity='.5' stroke-width='1.5'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/shell.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/views.css">
+  <link rel="modulepreload" href="js/app.js">
 </head>
 <body>
-<header>
-  <div class="header-top">
-    <h1>🙏 Salah</h1>
-    <select id="langSelect" class="lang-select" aria-label="Select Language">
-      <option value="en">🇬🇧 English</option>
-      <option value="es">🇪🇸 Spanish</option>
-      <option value="fr">🇫🇷 French</option>
-      <option value="hi">🇮🇳 Hindi</option>
-    </select>
+  <a class="skip-link" href="#main" data-i18n="app.skip">Skip to content</a>
+
+  <!-- The Intelligence Core renders here, behind the interface. It never receives pointer events. -->
+  <canvas id="core-canvas" class="core-canvas" aria-hidden="true"></canvas>
+
+  <div class="app">
+    <aside class="rail">
+      <a class="brand" href="#/overview" aria-label="SALAH">
+        <svg class="brand__mark" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+          <circle cx="18" cy="18" r="16.5" fill="none" stroke="#3ddc97" stroke-opacity=".28"/>
+          <circle cx="18" cy="18" r="11.5" fill="none" stroke="#7cc7e8" stroke-opacity=".45" stroke-dasharray="3 3"/>
+          <circle cx="18" cy="18" r="6.5" fill="#3ddc97"/>
+          <path d="M18 11.5V3" stroke="#9cf5cf" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span class="brand__name">salah</span>
+        <span class="brand__descriptor" data-i18n="app.descriptor">Merchant intelligence</span>
+      </a>
+
+      <nav class="nav" aria-label="Primary" data-i18n-label="nav.label">
+        <ul>
+          <li><a href="#/overview" data-nav="overview"><span data-icon="overview"></span><span data-i18n="nav.overview">Overview</span></a></li>
+          <li><a href="#/evidence" data-nav="evidence"><span data-icon="evidence"></span><span data-i18n="nav.evidence">Evidence</span></a></li>
+          <li><a href="#/copilot" data-nav="copilot"><span data-icon="copilot"></span><span data-i18n="nav.copilot">Copilot</span></a></li>
+          <li><a href="#/updates" data-nav="updates"><span data-icon="updates"></span><span data-i18n="nav.updates">Updates</span></a></li>
+          <li><a href="#/system" data-nav="system"><span data-icon="system"></span><span data-i18n="nav.system">System</span></a></li>
+        </ul>
+      </nav>
+
+      <div class="rail__foot">
+        <span class="chip chip--synthetic" data-i18n="shell.synthetic">Synthetic data</span>
+        <p class="rail__note" data-i18n="disclaimer.short">Synthetic, illustrative data — not a real merchant and not live Paytm transactions.</p>
+      </div>
+    </aside>
+
+    <div class="main-col">
+      <header class="topbar">
+        <a class="brand brand--compact" href="#/overview" aria-label="SALAH">
+          <svg class="brand__mark" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+            <circle cx="18" cy="18" r="16.5" fill="none" stroke="#3ddc97" stroke-opacity=".28"/>
+            <circle cx="18" cy="18" r="11.5" fill="none" stroke="#7cc7e8" stroke-opacity=".45" stroke-dasharray="3 3"/>
+            <circle cx="18" cy="18" r="6.5" fill="#3ddc97"/>
+          </svg>
+          <span class="brand__name">salah</span>
+        </a>
+        <div class="topbar__context">
+          <span class="topbar__workspace" data-i18n="shell.workspace">Demo merchant workspace</span>
+          <span class="topbar__sep" aria-hidden="true"></span>
+          <span class="chip chip--synthetic" data-i18n="shell.synthetic">Synthetic data</span>
+          <span id="data-through"></span>
+        </div>
+        <div class="topbar__right">
+          <div id="status-pills" class="pills" aria-live="polite"></div>
+          <label class="lang">
+            <span class="sr-only" data-i18n="shell.language">Language</span>
+            <span data-icon="globe"></span>
+            <select id="lang-select">
+              <option value="en">English</option>
+              <option value="hi" lang="hi">हिन्दी</option>
+              <option value="es" lang="es">Español</option>
+              <option value="fr" lang="fr">Français</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <main id="main" tabindex="-1">
+        <section class="view" data-view="overview"></section>
+        <section class="view" data-view="evidence" hidden></section>
+        <section class="view" data-view="copilot" hidden></section>
+        <section class="view" data-view="updates" hidden></section>
+        <section class="view" data-view="system" hidden></section>
+        <noscript>
+          <p class="notice notice--error">SALAH needs JavaScript to load merchant data. The API remains available at /context and /api/health.</p>
+        </noscript>
+      </main>
+    </div>
   </div>
-  <p id="headerSubtitle">Your AI financial copilot — ask by voice or text, get instant answers.</p>
-</header>
 
-<div class="cards">
-  <div class="card"><div class="label" id="lblWeek">This Week's Revenue</div><div class="value" id="mWeek">—</div><div class="sub" id="mWeekSub"></div></div>
-  <div class="card"><div class="label" id="lblWeak">Weakest Day</div><div class="value" id="mWeak">—</div><div class="sub" id="mWeakSub"></div></div>
-  <div class="card"><div class="label" id="lblEvening">Evening Share</div><div class="value" id="mEvening">—</div><div class="sub" id="mEveningSub"></div></div>
-  <div class="card"><div class="label" id="lblLapsed">Lapsed Regulars</div><div class="value" id="mLapsed">—</div><div class="sub" id="mLapsedSub"></div></div>
-</div>
+  <nav class="tabbar" aria-label="Primary" data-i18n-label="nav.label">
+    <ul>
+      <li><a href="#/overview" data-nav="overview"><span data-icon="overview"></span><span data-i18n="nav.overview">Overview</span></a></li>
+      <li><a href="#/evidence" data-nav="evidence"><span data-icon="evidence"></span><span data-i18n="nav.evidence">Evidence</span></a></li>
+      <li><a href="#/copilot" data-nav="copilot"><span data-icon="copilot"></span><span data-i18n="nav.copilot">Copilot</span></a></li>
+      <li><a href="#/updates" data-nav="updates"><span data-icon="updates"></span><span data-i18n="nav.updates">Updates</span></a></li>
+      <li><a href="#/system" data-nav="system"><span data-icon="system"></span><span data-i18n="nav.system">System</span></a></li>
+    </ul>
+  </nav>
 
-<div class="chat"><div id="messages"></div></div>
+  <dialog id="reset-dialog" class="dialog" aria-labelledby="reset-title" aria-describedby="reset-body">
+    <form method="dialog">
+      <h2 id="reset-title">Start a new conversation?</h2>
+      <p id="reset-body"></p>
+      <div class="dialog__actions">
+        <button id="reset-cancel" class="btn btn--ghost" value="cancel" autofocus>Cancel</button>
+        <button id="reset-confirm" class="btn btn--danger" value="confirm">Clear conversation</button>
+      </div>
+    </form>
+  </dialog>
 
-<div class="status" id="status"></div>
+  <div id="toast" class="toast" role="status" hidden></div>
 
-<div class="controls">
-  <button class="mic" id="micBtn" title="Speak">🎤 Ask by voice</button>
-  <input id="input" placeholder="Or type your question... (e.g. how much did I earn this week?)">
-  <button id="sendBtn">➤</button>
-  <button class="ghost" id="nudgeBtn" title="Proactive update">🔔</button>
-  <button class="ghost" id="resetBtn" title="Reset conversation">↺</button>
-</div>
-
-<div id="tracePanel">
-  <h3 id="traceHeading">🔍 Glass-box trace (for developers)</h3>
-  <div id="traceBody">No trace yet. Ask a question.</div>
-</div>
-
-<audio id="ttsAudio" style="display:none"></audio>
-
-<script>
-const API = "";
-const $ = (id) => document.getElementById(id);
-const messages = $("messages");
-let recording = false, mediaRecorder = null, chunks = [];
-let currentContextData = null, currentTraceData = null;
-
-const TRANSLATIONS = {
-  en: {
-    title: "Salah — AI Financial Copilot",
-    subtitle: "Your AI financial copilot — ask by voice or text, get instant answers.",
-    cards: {
-      weekLabel: "This Week's Revenue",
-      weakLabel: "Weakest Day",
-      eveningLabel: "Evening Share",
-      lapsedLabel: "Lapsed Regulars",
-      lapsedSub: "regulars with lower activity",
-      weakSub: (avg, overall) => `₹${avg} avg vs ₹${overall} overall`,
-      eveningSub: (rev) => `₹${rev} evening`
-    },
-    controls: {
-      micBtn: "🎤 Ask by voice",
-      micTitle: "Speak",
-      stopBtn: "⏹ Stop recording",
-      inputPlaceholder: "Or type your question... (e.g. how much did I earn this week?)",
-      nudgeTitle: "Proactive update",
-      resetTitle: "Reset conversation"
-    },
-    status: {
-      thinking: "Thinking...",
-      listening: "Listening...",
-      nudgeLoading: "Fetching update...",
-      notUnderstood: "Could not understand — please type your question.",
-      voiceFail: "Voice unavailable — please type your question.",
-      micDenied: "Microphone access denied."
-    },
-    messages: {
-      reset: "Fresh start. Ask anything! 🙏",
-      connError: "⚠️ Connection problem. Please try again.",
-      nudgeError: "⚠️ Proactive update unavailable.",
-      nudgeUnavailable: "Update unavailable"
-    },
-    trace: {
-      heading: "🔍 Glass-box trace (for developers)",
-      empty: "No trace yet. Ask a question."
-    }
-  },
-  es: {
-    title: "Salah — Copiloto Financiero IA",
-    subtitle: "Tu copiloto financiero IA — pregunta por voz o texto, obtén respuestas al instante.",
-    cards: {
-      weekLabel: "Ingresos de esta semana",
-      weakLabel: "Día más débil",
-      eveningLabel: "Cuota de la tarde",
-      lapsedLabel: "Clientes inactivos",
-      lapsedSub: "habituales con menor actividad",
-      weakSub: (avg, overall) => `₹${avg} prom. vs ₹${overall} general`,
-      eveningSub: (rev) => `₹${rev} por la tarde`
-    },
-    controls: {
-      micBtn: "🎤 Preguntar por voz",
-      micTitle: "Hablar",
-      stopBtn: "⏹ Detener grabación",
-      inputPlaceholder: "O escribe tu pregunta... (ej. ¿cuánto gané esta semana?)",
-      nudgeTitle: "Actualización proactiva",
-      resetTitle: "Reiniciar conversación"
-    },
-    status: {
-      thinking: "Pensando...",
-      listening: "Escuchando...",
-      nudgeLoading: "Obteniendo actualización...",
-      notUnderstood: "No se entendió — por favor escriba su pregunta.",
-      voiceFail: "Voz no disponible — por favor escriba su pregunta.",
-      micDenied: "Acceso al micrófono denegado."
-    },
-    messages: {
-      reset: "¡Nuevo comienzo! Pregunta lo que quieras. 🙏",
-      connError: "⚠️ Problema de conexión. Por favor intente de nuevo.",
-      nudgeError: "⚠️ Actualización proactiva no disponible.",
-      nudgeUnavailable: "Actualización no disponible"
-    },
-    trace: {
-      heading: "🔍 Traza transparente (para desarrolladores)",
-      empty: "Sin traza aún. Haz una pregunta."
-    }
-  },
-  fr: {
-    title: "Salah — Copilote Financier IA",
-    subtitle: "Votre copilote financier IA — posez vos questions par voix ou texte, obtenez des réponses instantanées.",
-    cards: {
-      weekLabel: "Revenus de la semaine",
-      weakLabel: "Jour le plus faible",
-      eveningLabel: "Part de soirée",
-      lapsedLabel: "Clients inactifs",
-      lapsedSub: "habitués moins actifs",
-      weakSub: (avg, overall) => `₹${avg} moy. vs ₹${overall} global`,
-      eveningSub: (rev) => `₹${rev} en soirée`
-    },
-    controls: {
-      micBtn: "🎤 Poser par voix",
-      micTitle: "Parler",
-      stopBtn: "⏹ Arrêter l'enregistrement",
-      inputPlaceholder: "Ou tapez votre question... (ex. combien ai-je gagné cette semaine ?)",
-      nudgeTitle: "Mise à jour proactive",
-      resetTitle: "Réinitialiser la conversation"
-    },
-    status: {
-      thinking: "Réflexion en cours...",
-      listening: "Écoute en cours...",
-      nudgeLoading: "Obtention de la mise à jour...",
-      notUnderstood: "Compréhension impossible — veuillez taper votre question.",
-      voiceFail: "Voz indisponible — veuillez taper votre question.",
-      micDenied: "Accès au microphone refusé."
-    },
-    messages: {
-      reset: "Nouveau départ. Posez vos questions ! 🙏",
-      connError: "⚠️ Problème de connexion. Veuillez réessayer.",
-      nudgeError: "⚠️ Mise à jour proactive indisponible.",
-      nudgeUnavailable: "Mise à jour indisponible"
-    },
-    trace: {
-      heading: "🔍 Trace transparente (pour développeurs)",
-      empty: "Aucune trace. Posez une question."
-    }
-  },
-  hi: {
-    title: "Salah — Business Partner",
-    subtitle: "आपका AI फाइनेंशियल को-पायलट — बोलकर या टाइप करके पूछें, सीधा जवाब पाएं।",
-    cards: {
-      weekLabel: "इस हफ्ते की कमाई",
-      weakLabel: "सबसे कमजोर दिन",
-      eveningLabel: "Evening Share",
-      lapsedLabel: "पुराने ग्राहक",
-      lapsedSub: "नियमित ग्राहक जो कम आ रहे हैं",
-      weakSub: (avg, overall) => `₹${avg} औसत vs ₹${overall} कुल औसत`,
-      eveningSub: (rev) => `₹${rev} शाम का`
-    },
-    controls: {
-      micBtn: "🎤 बोल कर पूछो",
-      micTitle: "बोलिए",
-      stopBtn: "⏹ रोक दो",
-      inputPlaceholder: "या टाइप करके पूछो... (जैसे: इस हफ्ते कितना कमाया)",
-      nudgeTitle: "Proactive update",
-      resetTitle: "Reset conversation"
-    },
-    status: {
-      thinking: "सोच रहा हूँ...",
-      listening: "सुन रहा हूँ...",
-      nudgeLoading: "अपडेट ला रहा हूँ...",
-      notUnderstood: "समझ नहीं आया — टाइप करके पूछो।",
-      voiceFail: "Voice फ़ेल — टाइप करके पूछो।",
-      micDenied: "माइक्रोफ़ोन एक्सेस नहीं मिला।"
-    },
-    messages: {
-      reset: "नयी शुरुआत। पूछो क्या पूछना है। 🙏",
-      connError: "⚠️ कनेक्शन समस्या। दोबारा कोशिश करें।",
-      nudgeError: "⚠️ अपडेट उपलब्ध नहीं है।",
-      nudgeUnavailable: "अपडेट उपलब्ध नहीं है"
-    },
-    trace: {
-      heading: "🔍 Glass-box trace (डेवलपर्स के लिए)",
-      empty: "कोई trace नहीं। सवाल पूछो।"
-    }
-  }
-};
-
-let currentLang = localStorage.getItem("salah_lang") || "en";
-if (!TRANSLATIONS[currentLang]) currentLang = "en";
-
-function updateUI() {
-  const t = TRANSLATIONS[currentLang];
-  document.documentElement.lang = currentLang;
-  document.title = t.title;
-  $("headerSubtitle").textContent = t.subtitle;
-
-  $("lblWeek").textContent = t.cards.weekLabel;
-  $("lblWeak").textContent = t.cards.weakLabel;
-  $("lblEvening").textContent = t.cards.eveningLabel;
-  $("lblLapsed").textContent = t.cards.lapsedLabel;
-
-  if (!recording) {
-    $("micBtn").textContent = t.controls.micBtn;
-  } else {
-    $("micBtn").textContent = t.controls.stopBtn;
-  }
-  $("micBtn").title = t.controls.micTitle;
-  $("input").placeholder = t.controls.inputPlaceholder;
-  $("nudgeBtn").title = t.controls.nudgeTitle;
-  $("resetBtn").title = t.controls.resetTitle;
-
-  $("traceHeading").textContent = t.trace.heading;
-  renderTrace(currentTraceData);
-  loadContext();
-}
-
-function addMsg(role, text) {
-  const div = document.createElement("div");
-  div.className = "msg " + role;
-  div.textContent = text;
-  messages.appendChild(div);
-  messages.scrollTop = messages.scrollHeight;
-}
-
-function setStatus(t) { $("status").textContent = t || ""; }
-
-async function loadContext() {
-  try {
-    if (!currentContextData) {
-      const r = await fetch(API + "/context");
-      currentContextData = await r.json();
-    }
-    const c = currentContextData;
-    const t = TRANSLATIONS[currentLang].cards;
-
-    const wk = (c.weekly_revenue || []);
-    const last = wk.length ? wk[wk.length - 1] : null;
-    $("mWeek").textContent = last ? "₹" + last.revenue.toLocaleString("en-IN") : "₹0";
-    $("mWeekSub").textContent = last ? last.week : "";
-
-    const wd = c.weakest_weekday || {};
-    $("mWeak").textContent = wd.weekday || "—";
-    $("mWeakSub").textContent = wd.avg_daily_revenue != null ? t.weakSub(wd.avg_daily_revenue, wd.overall_avg_daily_revenue) : "";
-
-    const es = c.evening_share || {};
-    $("mEvening").textContent = es.evening_share_pct != null ? es.evening_share_pct + "%" : "—";
-    $("mEveningSub").textContent = es.evening_revenue != null ? t.eveningSub(es.evening_revenue.toLocaleString("en-IN")) : "";
-
-    const lr = c.lapsed_regulars || {};
-    $("mLapsed").textContent = lr.count != null ? lr.count : "—";
-    $("mLapsedSub").textContent = t.lapsedSub;
-  } catch (e) {
-    setStatus("Context load failed: " + e);
-  }
-}
-
-function renderTrace(trace) {
-  currentTraceData = trace;
-  const body = $("traceBody");
-  const t = TRANSLATIONS[currentLang];
-  if (!trace || !trace.length) {
-    body.innerHTML = t.trace.empty;
-    return;
-  }
-  body.innerHTML = trace.map(t =>
-    `<div style="margin:6px 0">
-      <span class="badge ${t.confidence}">${t.confidence}</span>
-      <b>${t.signal}</b>: ${t.value}<br>
-      <span style="color:#6c7284">→ ${t.implication} · <i>${t.source}</i></span>
-    </div>`).join("");
-}
-
-async function ask(question) {
-  if (!question.trim()) return;
-  const reqLang = currentLang;
-  const t = TRANSLATIONS[reqLang];
-  addMsg("user", question);
-  setStatus(t.status.thinking);
-  $("sendBtn").disabled = true;
-  try {
-    const r = await fetch(API + "/ask", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, language: reqLang })
-    });
-    const d = await r.json();
-    if (d.detail) throw new Error(d.detail);
-    addMsg("assistant", d.answer);
-    renderTrace(d.trace);
-    if (d.answer) speak(d.answer, reqLang);
-  } catch (e) {
-    addMsg("assistant", t.messages.connError);
-    setStatus("");
-  } finally {
-    $("sendBtn").disabled = false;
-    setStatus("");
-  }
-}
-
-async function speak(text, lang) {
-  try {
-    const r = await fetch(API + "/voice/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, language: lang || currentLang })
-    });
-    if (!r.ok) return; // voice failure gracefully falls back to text
-    const blob = await r.blob();
-    $("ttsAudio").src = URL.createObjectURL(blob);
-    $("ttsAudio").play().catch(() => {});
-  } catch (e) { /* text fallback */ }
-}
-
-async function nudge() {
-  const t = TRANSLATIONS[currentLang];
-  setStatus(t.status.nudgeLoading);
-  try {
-    const r = await fetch(API + "/nudge", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ force: true })
-    });
-    const d = await r.json();
-    addMsg("assistant", "🔔 " + (d.nudge || d.detail || t.messages.nudgeUnavailable));
-  } catch (e) {
-    addMsg("assistant", t.messages.nudgeError);
-  } finally { setStatus(""); }
-}
-
-async function reset() {
-  const t = TRANSLATIONS[currentLang];
-  try { await fetch(API + "/reset", { method: "POST" }); } catch (e) {}
-  messages.innerHTML = "";
-  renderTrace(null);
-  addMsg("assistant", t.messages.reset);
-}
-
-// ------------------------- voice recording -------------------------
-$("micBtn").addEventListener("click", async () => {
-  const t = TRANSLATIONS[currentLang];
-  if (!recording) {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder = new MediaRecorder(stream);
-      chunks = [];
-      mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
-      mediaRecorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: "audio/webm" });
-        setStatus(t.status.listening);
-        try {
-          const fd = new FormData();
-          fd.append("file", blob, "speech.webm");
-          const r = await fetch(API + "/voice/stt", { method: "POST", body: fd });
-          const d = await r.json();
-          if (d.text) { $("input").value = d.text; ask(d.text); }
-          else { setStatus(t.status.notUnderstood); }
-        } catch (e) { setStatus(t.status.voiceFail); }
-        finally { setStatus(""); }
-      };
-      mediaRecorder.start();
-      recording = true;
-      $("micBtn").textContent = t.controls.stopBtn;
-    } catch (e) { setStatus(t.status.micDenied); }
-  } else {
-    mediaRecorder.stop();
-    recording = false;
-    $("micBtn").textContent = t.controls.micBtn;
-  }
-});
-
-$("sendBtn").addEventListener("click", () => { const q = $("input").value; $("input").value = ""; ask(q); });
-$("input").addEventListener("keydown", (e) => { if (e.key === "Enter") { const q = $("input").value; $("input").value = ""; ask(q); } });
-$("nudgeBtn").addEventListener("click", nudge);
-$("resetBtn").addEventListener("click", reset);
-
-$("langSelect").addEventListener("change", (e) => {
-  const newLang = e.target.value;
-  currentLang = newLang;
-  localStorage.setItem("salah_lang", newLang);
-  updateUI();
-});
-
-// Initial setup
-$("langSelect").value = currentLang;
-updateUI();
-</script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>

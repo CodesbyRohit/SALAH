@@ -1,0 +1,133 @@
+/* SALAH design tokens — obsidian surfaces, emerald identity, restrained depth.
+   Dark-only by design: the product identity is built on near-black surfaces. */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces: obsidian → graphite */
+  --bg-0: #040605;
+  --bg-1: #070b09;
+  --surface-1: #0c1210;
+  --surface-1-a: rgba(12, 18, 16, 0.9);
+  --surface-2: #111916;
+  --surface-3: #16201c;
+  --surface-hover: #1a2621;
+  --line: rgba(196, 255, 228, 0.075);
+  --line-2: rgba(196, 255, 228, 0.12);
+  --line-3: rgba(196, 255, 228, 0.2);
+
+  /* Text (AA on every surface above) */
+  --text-1: #ecf3ef;
+  --text-2: #aab9b2;
+  --text-3: #80918a;
+
+  /* Identity */
+  --accent: #3ddc97;
+  --accent-2: #5ef0b0;
+  --accent-strong: #1fa874;
+  --accent-ink: #03140c;
+  --accent-wash: rgba(61, 220, 151, 0.09);
+  --accent-wash-2: rgba(61, 220, 151, 0.16);
+  --accent-line: rgba(61, 220, 151, 0.34);
+
+  /* Confidence tiers — always paired with a glyph and a label, never color alone */
+  --tier-fact: #3ddc97;
+  --tier-pattern: #7cc7e8;
+  --tier-hypothesis: #e7c46a;
+  --tier-unknown: #93a39d;
+
+  /* Status */
+  --warn: #e7b45a;
+  --warn-wash: rgba(231, 180, 90, 0.1);
+  --danger: #f07a6a;
+  --danger-wash: rgba(240, 122, 106, 0.1);
+  --danger-ink: #1f0a06;
+
+  /* Data viz (validated: emphasis vs de-emphasis on the chart surface) */
+  --viz-accent: #1fa874;
+  --viz-accent-hover: #2bc189;
+  --viz-muted: #56706a;
+  --viz-muted-hover: #6b8780;
+  --viz-grid: #18221e;
+  --viz-axis: #2b3a34;
+  --viz-surface: #0c1210;
+
+  /* Type */
+  --font-display: "Instrument Serif", "Iowan Old Style", "Palatino Linotype", Georgia, "Nirmala UI", "Noto Serif Devanagari", serif;
+  --font-ui: "Manrope", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Nirmala UI", "Noto Sans Devanagari", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --fs-2xs: 0.6875rem;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-md: 0.9375rem;
+  --fs-lg: 1.0625rem;
+  --fs-xl: 1.3125rem;
+  --fs-2xl: 1.75rem;
+  --fs-kpi: clamp(1.5rem, 1.2rem + 0.9vw, 2rem);
+  --fs-display: clamp(2.35rem, 1.3rem + 3.4vw, 4.4rem);
+  --fs-title: clamp(2rem, 1.4rem + 2vw, 3.1rem);
+
+  /* Space (4px base) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+  --sp-9: 56px;
+  --sp-10: 72px;
+
+  /* Shape */
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-xl: 28px;
+  --r-pill: 999px;
+
+  /* Depth */
+  --shadow-1: inset 0 1px 0 rgba(255, 255, 255, 0.025), 0 10px 30px -18px rgba(0, 0, 0, 0.8);
+  --shadow-2: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 30px 70px -30px rgba(0, 0, 0, 0.9);
+  --focus-ring: 0 0 0 2px var(--bg-0), 0 0 0 4px var(--accent-2);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-1: 120ms;
+  --dur-2: 220ms;
+  --dur-3: 420ms;
+  --dur-4: 800ms;
+
+  /* Layout */
+  --rail-w: 252px;
+  --topbar-h: 64px;
+  --tabbar-h: 64px;
+  --content-max: 1360px;
+  --gutter: 32px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 0ms;
+    --dur-2: 0ms;
+    --dur-3: 0ms;
+    --dur-4: 0ms;
+  }
+}
+
+@media (max-width: 1100px) {
+  :root {
+    --rail-w: 84px;
+    --gutter: 24px;
+  }
+}
+
+@media (max-width: 760px) {
+  :root {
+    --gutter: 16px;
+    --topbar-h: 56px;
+  }
+}
