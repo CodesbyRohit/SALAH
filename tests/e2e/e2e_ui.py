@@ -351,6 +351,23 @@ def suite(run: Run, ctx: dict, ins: dict):
         expect(page.locator(".msg--assistant").last).to_contain_text("Tuesday")
     _()
 
+    @check("rate limit (429) is explained, and the session cookie is HttpOnly")
+    def _():
+        cookies = {c["name"]: c for c in page.context.cookies()}
+        sid = cookies.get("salah_sid")
+        assert sid and sid["httpOnly"] and sid["sameSite"] == "Lax" and sid["path"] == "/", cookies
+        assert page.evaluate("document.cookie.includes('salah_sid')") is False  # unreadable from JS
+        page.allow_http_errors = True
+        page.route("**/ask", lambda route: route.fulfill(status=429, content_type="text/plain", body="Too Many Requests"))
+        page.locator("#composer-input").fill("rate limit probe")
+        page.locator("#composer-input").press("Enter")
+        expect(page.locator(".msg--error").last).to_contain_text("Too many requests right now")
+        page.unroute("**/ask")
+        page.allow_http_errors = False
+        page.locator(".msg--error").last.get_by_role("button", name="Retry").click()
+        expect(page.locator(".msg--error")).to_have_count(0)
+    _()
+
     @check("voice is honestly unavailable without a Sarvam key (real backend)")
     def _():
         mic = page.locator(".icon-btn--mic")

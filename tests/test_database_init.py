@@ -245,7 +245,7 @@ class _Endpoints(_IsolatedDb):
         ):
             p.start()
             self.addCleanup(p.stop)
-        main.conversation_history.clear()
+        main.conversations.clear_all()
 
 
 class EndpointsOnFreshDatabaseTests(_Endpoints):

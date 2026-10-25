@@ -49,6 +49,7 @@ const en = {
     http: "The server responded with an error ({status}).",
     shape: "The server's response was incomplete.",
     aborted: "Request cancelled.",
+    rateLimited: "Too many requests right now. Wait a minute, then try again.",
   },
   overview: {
     eyebrow: "Overview · {weeks}-week window to {date}",
@@ -221,7 +222,7 @@ const en = {
     emptyAnswer: "The server returned an empty answer.",
     resetTitle: "Start a new conversation?",
     resetBody:
-      "This clears the conversation here and on the server, including the server's local interaction log. Merchant data is not affected.",
+      "This clears your conversation here and on the server, including your entries in the server's local interaction log. Other visitors and merchant data are not affected.",
     resetConfirm: "Clear conversation",
     resetFailed: "Couldn't clear the server conversation. {reason}",
     counter: "{n} / {max}",
@@ -333,6 +334,7 @@ const hi = {
     http: "सर्वर ने त्रुटि लौटाई ({status})।",
     shape: "सर्वर का जवाब अधूरा था।",
     aborted: "अनुरोध रद्द किया गया।",
+    rateLimited: "अभी बहुत ज़्यादा अनुरोध हैं। एक मिनट रुककर फिर कोशिश करें।",
   },
   overview: {
     eyebrow: "सारांश · {date} तक के {weeks} हफ्ते",
@@ -499,7 +501,7 @@ const hi = {
     errorBody: "{reason} आपके सवाल का जवाब नहीं दिया गया।",
     emptyAnswer: "सर्वर ने खाली जवाब लौटाया।",
     resetTitle: "नई बातचीत शुरू करें?",
-    resetBody: "इससे यहाँ और सर्वर पर बातचीत मिट जाएगी, सर्वर का लोकल इंटरैक्शन लॉग भी। व्यापार का डेटा नहीं बदलेगा।",
+    resetBody: "इससे यहाँ और सर्वर पर आपकी बातचीत मिट जाएगी, सर्वर के लोकल इंटरैक्शन लॉग में आपकी एंट्री भी। दूसरे लोगों और व्यापार के डेटा पर कोई असर नहीं होगा।",
     resetConfirm: "बातचीत मिटाएँ",
     resetFailed: "सर्वर की बातचीत नहीं मिटी। {reason}",
     counter: "{n} / {max}",
@@ -611,6 +613,7 @@ const es = {
     http: "El servidor respondió con un error ({status}).",
     shape: "La respuesta del servidor estaba incompleta.",
     aborted: "Solicitud cancelada.",
+    rateLimited: "Demasiadas solicitudes ahora mismo. Espera un minuto y vuelve a intentarlo.",
   },
   overview: {
     eyebrow: "Resumen · ventana de {weeks} semanas hasta el {date}",
@@ -783,7 +786,7 @@ const es = {
     emptyAnswer: "El servidor devolvió una respuesta vacía.",
     resetTitle: "¿Empezar una conversación nueva?",
     resetBody:
-      "Se borrará la conversación aquí y en el servidor, incluido el registro local de interacciones del servidor. Los datos del comercio no cambian.",
+      "Se borrará tu conversación aquí y en el servidor, incluidas tus entradas en el registro local de interacciones. No afecta a otros visitantes ni a los datos del comercio.",
     resetConfirm: "Borrar conversación",
     resetFailed: "No se pudo borrar la conversación del servidor. {reason}",
     counter: "{n} / {max}",
@@ -895,6 +898,7 @@ const fr = {
     http: "Le serveur a renvoyé une erreur ({status}).",
     shape: "La réponse du serveur était incomplète.",
     aborted: "Requête annulée.",
+    rateLimited: "Trop de requêtes pour le moment. Patientez une minute puis réessayez.",
   },
   overview: {
     eyebrow: "Aperçu · fenêtre de {weeks} semaines jusqu'au {date}",
@@ -1067,7 +1071,7 @@ const fr = {
     emptyAnswer: "Le serveur a renvoyé une réponse vide.",
     resetTitle: "Commencer une nouvelle conversation ?",
     resetBody:
-      "La conversation sera effacée ici et sur le serveur, y compris le journal local des interactions du serveur. Les données du commerce ne changent pas.",
+      "Votre conversation sera effacée ici et sur le serveur, y compris vos entrées dans le journal local des interactions. Les autres visiteurs et les données du commerce ne sont pas concernés.",
     resetConfirm: "Effacer la conversation",
     resetFailed: "Impossible d'effacer la conversation du serveur. {reason}",
     counter: "{n} / {max}",

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import requests
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File, Response
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +29,7 @@ import cache as demo_cache
 import database
 import llm
 import memory
+import sessions
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +68,9 @@ MAX_QUESTION_LENGTH = 1000
 MAX_AUDIO_BYTES = 5 * 1024 * 1024
 MAX_TTS_CHARS = 2500
 
-conversation_history: list[dict] = []
+# Per-visitor conversation history (see sessions.py). Never shared: one
+# visitor's questions must not reach another visitor's model context.
+conversations = sessions.SessionStore(max_items=MAX_HISTORY_ITEMS)
 
 SUPPORTED_LANGUAGES = {
     "en": "English",
@@ -89,6 +92,25 @@ def normalize_language(code: str | None) -> str:
     value = code.strip().lower()
 
     return value if value in SUPPORTED_LANGUAGES else "en"
+
+
+def visitor_session(request: Request, response: Response) -> str:
+    """The caller's session id, issuing a new HttpOnly cookie when it is
+    missing or malformed. No login: the id only scopes conversation state."""
+    session_id = request.cookies.get(sessions.COOKIE_NAME)
+    if not sessions.valid(session_id):
+        session_id = sessions.new_id()
+        forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+        response.set_cookie(
+            sessions.COOKIE_NAME,
+            session_id,
+            max_age=sessions.COOKIE_MAX_AGE,
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=request.url.scheme == "https" or forwarded == "https",
+        )
+    return session_id
 
 
 # ---------------------------------------------------------------------------
@@ -277,9 +299,8 @@ def insights():
 
 
 @app.post("/ask")
-def ask(req: AskRequest):
+def ask(req: AskRequest, session_id: str = Depends(visitor_session)):
     """Answer a merchant question using SALAH's intelligence layer."""
-    global conversation_history
 
     question = req.question.strip()[:MAX_QUESTION_LENGTH]
     language = normalize_language(req.language)
@@ -326,7 +347,7 @@ def ask(req: AskRequest):
         recommendation = llm.explain_recommendation(
             question,
             merchant_context,
-            history=conversation_history,
+            history=conversations.history(session_id),
             language=language,
         )
 
@@ -345,29 +366,20 @@ def ask(req: AskRequest):
                 language=language,
             )
 
-    # Keep conversation history bounded.
-    conversation_history.append(
-        {
-            "role": "user",
-            "text": question,
-        }
+    # This visitor's history only (bounded by the store).
+    conversations.append(
+        session_id,
+        {"role": "user", "text": question},
+        {"role": "assistant", "text": answer},
     )
 
-    conversation_history.append(
-        {
-            "role": "assistant",
-            "text": answer,
-        }
-    )
-
-    if len(conversation_history) > MAX_HISTORY_ITEMS:
-        conversation_history = conversation_history[-MAX_HISTORY_ITEMS:]
-
-    # Persist the interaction in SALAH's memory layer.
+    # Persist the interaction in SALAH's memory layer, tagged so this
+    # visitor's /reset can remove it without touching anyone else's.
     memory.store(
         question,
         answer,
         trace=trace,
+        session=sessions.log_key(session_id),
     )
 
     return {
@@ -507,12 +519,10 @@ def voice_tts(payload: dict):
 
 
 @app.post("/reset")
-def reset():
-    """Clear the current conversation."""
-    global conversation_history
-
-    conversation_history.clear()
-    memory.reset_conversation()
+def reset(session_id: str = Depends(visitor_session)):
+    """Clear the caller's conversation and their local log entries only."""
+    conversations.clear(session_id)
+    memory.reset_conversation(session=sessions.log_key(session_id))
 
     return {
         "ok": True,

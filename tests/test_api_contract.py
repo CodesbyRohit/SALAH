@@ -51,7 +51,7 @@ class _ClientCase(unittest.TestCase):
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
-        main.conversation_history.clear()
+        main.conversations.clear_all()
 
 
 class HealthContractTests(_ClientCase):
@@ -258,12 +258,16 @@ class VoiceAndResetContractTests(_ClientCase):
                                                    "Access-Control-Request-Method": "POST"})
         self.assertNotIn("access-control-allow-origin", pre.headers)
 
-    def test_reset_clears_conversation(self):
-        main.conversation_history.append({"role": "user", "text": "x"})
+    def test_reset_clears_only_the_callers_conversation(self):
+        self.client.post("/ask", json={"question": "kya karun?", "language": "en"})
+        sid = self.client.cookies.get(main.sessions.COOKIE_NAME)
+        main.conversations.append("someone-elses-session-id-0123456789ab", {"role": "user", "text": "theirs"})
         res = self.client.post("/reset")
         self.assertEqual(res.json(), {"ok": True})
-        self.assertEqual(main.conversation_history, [])
-        main.memory.reset_conversation.assert_called_once()
+        self.assertEqual(main.conversations.history(sid), [])
+        self.assertEqual(main.conversations.history("someone-elses-session-id-0123456789ab"),
+                         [{"role": "user", "text": "theirs"}])
+        main.memory.reset_conversation.assert_called_once_with(session=main.sessions.log_key(sid))
 
 
 class FrontendServingTests(_ClientCase):

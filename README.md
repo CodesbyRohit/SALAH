@@ -51,7 +51,7 @@ Payment data (SQLite)
 | `POST /nudge` `{force, language}` | `nudge`, `language`, generated on request |
 | `POST /voice/stt` (multipart `file`) | `{text}`; `415` unless the upload is `audio/*`, `413` above 5 MB, `503` when Sarvam is not configured |
 | `POST /voice/tts` `{text, language}` | audio bytes; `413` above 2,500 characters, `503` when unavailable or the language is not `en`/`hi` |
-| `POST /reset` | clears the conversation and the local interaction log |
+| `POST /reset` | clears the caller's conversation and the caller's entries in the local interaction log; other visitors are not affected |
 
 ## Data location and first-run initialisation
 
@@ -318,9 +318,10 @@ a stub), authentication.
   answers come from the analytics engine in English; the UI says so in other
   languages.
 - Fonts load from Google Fonts; offline, system fonts are used instead.
-- Conversation history is one in-process list shared by every browser session
-  (single-merchant demo). On serverless it is also per instance.
-- The API has no authentication and no rate limiting (see *Security posture*).
+- Conversation history is per visitor (session cookie) but in memory: on
+  serverless a request served by another instance starts with an empty history.
+- The API has no authentication; rate limiting is a Vercel Firewall rule that is
+  drafted below but not yet applied (see *Security posture*).
 
 ## Security posture
 
@@ -336,10 +337,36 @@ specific origins in); source, data and `.env` files are not served.
 Static files are sent with `s-maxage` so Vercel's CDN can serve them from the
 edge (browsers still revalidate with `max-age=0`); API responses are not cached.
 
+**Visitor isolation.** Each browser gets a random session id in an HttpOnly,
+SameSite=Lax cookie (Secure over HTTPS); there is no login. Conversation
+history is kept per session in memory (last 20 turns, at most 1,000 sessions,
+2 h idle expiry), so one visitor's questions never reach another visitor's
+model context. `/reset` clears only the caller's history and the caller's
+entries in the local interaction log. Log entries carry a hash of the session
+id, never the cookie value. `tests/test_sessions.py` covers this with two
+independent clients.
+
+**Rate limiting (drafted, not applied).** In-app limits only count requests on
+one serverless instance, so the limit belongs in the Vercel Firewall. The
+frontend already explains a `429`. Proposed rule, 30 POSTs per minute per IP on
+the endpoints that do work or call paid providers. Check rate-limit
+availability on the project's plan, then stage, review and publish it:
+
+```powershell
+npx vercel firewall rules add "SALAH API rate limit" --project salah `
+  --condition '{"type":"method","op":"eq","value":"POST"}' `
+  --condition '{"type":"path","op":"re","value":"^/(ask|nudge|reset|voice/(stt|tts))$"}' `
+  --action rate_limit --rate-limit-requests 30 --rate-limit-window 60 `
+  --rate-limit-keys ip --rate-limit-action rate_limit `
+  --description "Per-IP limit on SALAH API endpoints"
+npx vercel firewall diff      # review the staged draft
+npx vercel firewall publish   # makes it live for the project
+```
+
 | | Public synthetic demo (today) | Real merchant data (future) |
 |---|---|---|
 | Access | Public, no login: the data is synthetic | Per-merchant authentication; data scoped by merchant id |
-| Abuse / spend | Keep `GEMINI_API_KEY` unset, or add a Vercel Firewall rate limit on `/ask`, `/nudge`, `/voice/*` first; in-process limits don't work across serverless instances | Per-merchant quotas and provider budget alerts |
-| Conversation | One in-process history shared by all visitors (unused while no model is configured) | History keyed by authenticated session |
-| `/reset` | Anyone can clear the shared, ephemeral log | Scoped to the caller's session |
+| Abuse / spend | Keep `GEMINI_API_KEY` unset until the Firewall rate limit above is published | Per-merchant quotas and provider budget alerts |
+| Conversation | Per visitor (session cookie), in memory, per instance | History keyed by authenticated user, persisted |
+| `/reset` | Clears only the caller's session and log entries | Same, plus audit trail |
 | Storage | Ephemeral `/tmp` SQLite | Managed database with backups, encryption at rest, retention policy |
