@@ -482,6 +482,9 @@ def suite(run: Run, ctx: dict, ins: dict):
 
     # --- voice success path (mocked Sarvam + fake microphone) -----------------
     vpage = run.page()
+    # Voice, not the 3D core, is under test here. With software WebGL and a
+    # saturated CPU, starting the fake microphone took longer than 5 s.
+    vpage.add_init_script("try { localStorage.setItem('salah_render', 'off') } catch (e) {}")
 
     @check("voice flow: record → transcript for review → send → listen → stop (Sarvam mocked)")
     def _():
@@ -501,7 +504,7 @@ def suite(run: Run, ctx: dict, ins: dict):
         mic = vpage.locator(".icon-btn--mic")
         expect(mic).to_be_enabled()
         mic.click()
-        expect(vpage.locator(".voice-bar[data-state='recording']")).to_be_visible()
+        expect(vpage.locator(".voice-bar[data-state='recording']")).to_be_visible(timeout=15000)
         expect(vpage.locator(".voice-bar")).to_contain_text("Recording")
         vpage.wait_for_timeout(1500)
         mic.click()
@@ -547,7 +550,7 @@ def suite(run: Run, ctx: dict, ins: dict):
         # Time the recording from when it starts, not from the click: under
         # load the permission step alone can take most of a second, which
         # left a near-empty clip ("No speech was captured") intermittently.
-        expect(vpage.locator(".voice-bar[data-state='recording']")).to_be_visible()
+        expect(vpage.locator(".voice-bar[data-state='recording']")).to_be_visible(timeout=15000)
         vpage.wait_for_timeout(1200)
         mic.click()
         expect(vpage.locator(".voice-bar[data-state='error']")).to_contain_text("STT unavailable")
@@ -558,6 +561,12 @@ def suite(run: Run, ctx: dict, ins: dict):
     @check("data load failure: honest error panel, no numbers, retry recovers")
     def _():
         pg = run.page()
+        # This check is about the error panel and Retry, not the 3D core (it has
+        # its own checks). Software-rendered WebGL in the test browser competes
+        # for CPU with the local server; on a loaded machine that stretched
+        # Retry -> data from ~0.3 s to as much as 11.8 s and failed a 5 s
+        # timeout although every retry recovered.
+        pg.add_init_script("try { localStorage.setItem('salah_render', 'off') } catch (e) {}")
         pg.allow_http_errors = True
         pg.route("**/context", lambda r: r.fulfill(status=503, content_type="application/json",
                                                    body='{"detail":"Merchant data unavailable: test"}'))
@@ -569,7 +578,7 @@ def suite(run: Run, ctx: dict, ins: dict):
         pg.unroute("**/context")
         pg.allow_http_errors = False
         pg.get_by_role("button", name="Retry").first.click()
-        expect(pg.locator(".kpi__value").first).to_have_text("₹7,677")
+        expect(pg.locator(".kpi__value").first).to_have_text("₹7,677", timeout=15000)
         pg.context.close()
     _()
 
