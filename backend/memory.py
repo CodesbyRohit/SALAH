@@ -12,7 +12,8 @@ BASELINE (pre-Phase-7) BEHAVIOUR — kept intentionally so Phase 7 has real work
 import json
 import os
 from datetime import datetime
-from pathlib import Path
+
+import database
 
 try:
     import cognee  # type: ignore
@@ -21,7 +22,9 @@ except Exception:
     cognee = None
     COGNEE_AVAILABLE = False
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+# Same resolved data directory as the database: data/ locally, /tmp/salah on
+# serverless (the deployment bundle is read-only).
+DATA_DIR = database.data_dir()
 LOG_PATH = DATA_DIR / "interactions.jsonl"
 _last_cognee_error: str | None = None
 
