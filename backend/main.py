@@ -3,6 +3,7 @@ SALAH — backend entrypoint (FastAPI).
 """
 
 import base64
+import logging
 import os
 import sys
 from datetime import datetime
@@ -50,6 +51,8 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
+
+log = logging.getLogger("salah")
 
 MAX_HISTORY_ITEMS = 20
 MAX_QUESTION_LENGTH = 1000
@@ -228,9 +231,11 @@ def context():
             detail=f"Merchant data unavailable: {exc}",
         ) from exc
     except Exception as exc:
+        # Details go to the server log, not to the client.
+        log.exception("building merchant context failed")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to build merchant context: {exc}",
+            detail="Failed to build merchant context",
         ) from exc
 
 
@@ -254,9 +259,10 @@ def insights():
             detail=f"Merchant data unavailable: {exc}",
         ) from exc
     except Exception as exc:
+        log.exception("building merchant insights failed")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to build merchant insights: {exc}",
+            detail="Failed to build merchant insights",
         ) from exc
 
 
@@ -282,8 +288,14 @@ def ask(req: AskRequest):
             status_code=503,
             detail=f"Merchant data unavailable: {exc}",
         ) from exc
-    except Exception:
-        merchant_context = {}
+    except Exception as exc:
+        # Same for a broken analytics step: an empty context would produce an
+        # answer with invented zeros.
+        log.exception("building merchant context for /ask failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to build merchant context",
+        ) from exc
 
     trace = None
     action = None
@@ -370,8 +382,12 @@ def nudge(req: NudgeRequest):
             status_code=503,
             detail=f"Merchant data unavailable: {exc}",
         ) from exc
-    except Exception:
-        merchant_context = {}
+    except Exception as exc:
+        log.exception("building merchant context for /nudge failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to build merchant context",
+        ) from exc
 
     weakest_weekday = merchant_context.get(
         "weakest_weekday",

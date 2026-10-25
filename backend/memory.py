@@ -113,7 +113,7 @@ def status() -> dict:
     return {
         "cognee_available": _cognee_ok(),
         "last_cognee_error": _last_cognee_error,
-        "local_log": str(LOG_PATH),
+        "local_log": LOG_PATH.name,  # file name only: no filesystem layout in /api/health
         "local_log_entries": _count_local_log_entries(),
     }
 

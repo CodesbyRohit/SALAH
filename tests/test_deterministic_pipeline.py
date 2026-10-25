@@ -192,13 +192,17 @@ class DeterministicEngineTests(unittest.TestCase):
 
         weekly = self.context["weekly_revenue"]
         total = round(sum(w["revenue"] for w in weekly), 2)
-        avg = round(total / len(weekly), 2)
+        # The window length, not len(weekly): the calendar-week buckets include
+        # a partial first week, which made this say "9 hafte" and understate
+        # the weekly average.
+        weeks = self.context["weekday_profile"]["weeks"]
+        avg = round(total / weeks, 2)
         ww = self.context["weakest_weekday"]
         lr = self.context["lapsed_regulars"]
         tt = self.context["ticket_trend"]
         es = self.context["evening_share"]
         expected = (
-            f"Pichhle {len(weekly)} hafte ka total revenue {total} hai "
+            f"Pichhle {weeks} hafte ka total revenue {total} hai "
             f"(average {avg} per hafta).",
             f"{ww['weekday']} ka average {ww['avg_daily_revenue']} hai, jabki "
             f"overall daily average {ww['overall_avg_daily_revenue']} hai.",

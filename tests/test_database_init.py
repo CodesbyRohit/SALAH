@@ -173,8 +173,11 @@ class InitialisationTests(_IsolatedDb):
         blocker = self.dir / "not-a-directory"
         blocker.write_text("x")
         self.set_db_path(blocker / "merchant.db")
-        with self.assertRaises(database.DatabaseUnavailable):
+        with self.assertRaises(database.DatabaseUnavailable) as caught:
             database.ensure_database()
+        # The message reaches /api/health and 503 bodies: no directory names.
+        self.assertNotIn(str(self.dir), str(caught.exception))
+        self.assertNotIn("not-a-directory", str(caught.exception))
 
     def test_database_removed_after_initialisation_is_recreated(self):
         analytics.get_data_end()

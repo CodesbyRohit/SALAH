@@ -151,6 +151,12 @@ def validate(path: Path) -> list[str]:
 # Initialisation
 # ---------------------------------------------------------------------------
 
+def _reason(exc: OSError) -> str:
+    """OS error text without the filename: messages reach /api/health and 503
+    responses, which must not reveal filesystem layout."""
+    return exc.strerror or type(exc).__name__
+
+
 def _build_into_place(path: Path, replace_existing: bool) -> dict:
     """Generate into a private temp file, validate it, then atomically move it
     to `path`. Returns the dataset summary."""
@@ -197,13 +203,15 @@ def ensure_database(path: Path | None = None) -> Path:
         except sqlite3.Error as exc:
             raise DatabaseUnavailable(f"{path.name} exists but is not readable SQLite ({exc}); refusing to overwrite") from exc
         except OSError as exc:
-            raise DatabaseUnavailable(f"cannot access {path.name} ({exc})") from exc
+            raise DatabaseUnavailable(f"cannot access {path.name} ({_reason(exc)})") from exc
         if not tables:  # missing, zero-byte, or no tables: nothing to lose
             try:
                 _build_into_place(path, replace_existing=False)
             except DatabaseUnavailable:
                 raise
-            except (OSError, sqlite3.Error) as exc:
+            except OSError as exc:
+                raise DatabaseUnavailable(f"could not create {path.name} in its data directory ({_reason(exc)})") from exc
+            except sqlite3.Error as exc:
                 raise DatabaseUnavailable(f"could not create {path.name} in its data directory ({exc})") from exc
         problems = validate(path)
         if problems:
