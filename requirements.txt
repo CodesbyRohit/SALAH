@@ -2,4 +2,5 @@ fastapi>=0.110
 uvicorn>=0.29
 requests>=2.31
 pydantic>=2.6
+python-multipart>=0.0.9   # required by FastAPI for the /voice/stt upload
 # Optional (Phase 7 memory): cognee
