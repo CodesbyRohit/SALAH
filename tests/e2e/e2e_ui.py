@@ -351,6 +351,47 @@ def suite(run: Run, ctx: dict, ins: dict):
         expect(page.locator(".msg--assistant").last).to_contain_text("Tuesday")
     _()
 
+    @check("rate limit (429) is explained, and the session cookie is HttpOnly")
+    def _():
+        cookies = {c["name"]: c for c in page.context.cookies()}
+        sid = cookies.get("salah_sid")
+        assert sid and sid["httpOnly"] and sid["sameSite"] == "Lax" and sid["path"] == "/", cookies
+        assert page.evaluate("document.cookie.includes('salah_sid')") is False  # unreadable from JS
+        page.allow_http_errors = True
+        page.route("**/ask", lambda route: route.fulfill(status=429, content_type="text/plain", body="Too Many Requests"))
+        page.locator("#composer-input").fill("rate limit probe")
+        page.locator("#composer-input").press("Enter")
+        expect(page.locator(".msg--error").last).to_contain_text("Too many requests right now")
+        page.unroute("**/ask")
+        page.allow_http_errors = False
+        page.locator(".msg--error").last.get_by_role("button", name="Retry").click()
+        expect(page.locator(".msg--error")).to_have_count(0)
+        page.wait_for_selector(".msg--thinking", state="detached")  # let the retried answer land
+    _()
+
+    @check("an answer the server could not remember says so (capacity)")
+    def _():
+        def not_remembered(route):
+            resp = route.fetch(headers=run.headers(route.request))
+            data = resp.json()
+            data["remembered"] = False
+            route.fulfill(response=resp, json=data)
+        page.wait_for_selector(".msg--thinking", state="detached")
+        page.route("**/ask", not_remembered)
+        try:
+            page.locator("#composer-input").fill("capacity probe")
+            page.locator("#composer-input").press("Enter")
+            msg = page.locator(".msg--assistant").last
+            expect(msg).to_contain_text("Total revenue")
+            expect(msg.locator(".msg__reason--memory")).to_contain_text("won't be remembered")
+        finally:
+            page.unroute("**/ask")
+        page.locator("#composer-input").fill("normal question")
+        page.locator("#composer-input").press("Enter")
+        page.wait_for_selector(".msg--thinking", state="detached")
+        expect(page.locator(".msg--assistant").last.locator(".msg__reason--memory")).to_have_count(0)
+    _()
+
     @check("voice is honestly unavailable without a Sarvam key (real backend)")
     def _():
         mic = page.locator(".icon-btn--mic")
@@ -441,6 +482,9 @@ def suite(run: Run, ctx: dict, ins: dict):
 
     # --- voice success path (mocked Sarvam + fake microphone) -----------------
     vpage = run.page()
+    # Voice, not the 3D core, is under test here. With software WebGL and a
+    # saturated CPU, starting the fake microphone took longer than 5 s.
+    vpage.add_init_script("try { localStorage.setItem('salah_render', 'off') } catch (e) {}")
 
     @check("voice flow: record → transcript for review → send → listen → stop (Sarvam mocked)")
     def _():
@@ -460,7 +504,7 @@ def suite(run: Run, ctx: dict, ins: dict):
         mic = vpage.locator(".icon-btn--mic")
         expect(mic).to_be_enabled()
         mic.click()
-        expect(vpage.locator(".voice-bar[data-state='recording']")).to_be_visible()
+        expect(vpage.locator(".voice-bar[data-state='recording']")).to_be_visible(timeout=15000)
         expect(vpage.locator(".voice-bar")).to_contain_text("Recording")
         vpage.wait_for_timeout(1500)
         mic.click()
@@ -506,7 +550,7 @@ def suite(run: Run, ctx: dict, ins: dict):
         # Time the recording from when it starts, not from the click: under
         # load the permission step alone can take most of a second, which
         # left a near-empty clip ("No speech was captured") intermittently.
-        expect(vpage.locator(".voice-bar[data-state='recording']")).to_be_visible()
+        expect(vpage.locator(".voice-bar[data-state='recording']")).to_be_visible(timeout=15000)
         vpage.wait_for_timeout(1200)
         mic.click()
         expect(vpage.locator(".voice-bar[data-state='error']")).to_contain_text("STT unavailable")
@@ -517,6 +561,12 @@ def suite(run: Run, ctx: dict, ins: dict):
     @check("data load failure: honest error panel, no numbers, retry recovers")
     def _():
         pg = run.page()
+        # This check is about the error panel and Retry, not the 3D core (it has
+        # its own checks). Software-rendered WebGL in the test browser competes
+        # for CPU with the local server; on a loaded machine that stretched
+        # Retry -> data from ~0.3 s to as much as 11.8 s and failed a 5 s
+        # timeout although every retry recovered.
+        pg.add_init_script("try { localStorage.setItem('salah_render', 'off') } catch (e) {}")
         pg.allow_http_errors = True
         pg.route("**/context", lambda r: r.fulfill(status=503, content_type="application/json",
                                                    body='{"detail":"Merchant data unavailable: test"}'))
@@ -528,7 +578,7 @@ def suite(run: Run, ctx: dict, ins: dict):
         pg.unroute("**/context")
         pg.allow_http_errors = False
         pg.get_by_role("button", name="Retry").first.click()
-        expect(pg.locator(".kpi__value").first).to_have_text("₹7,677")
+        expect(pg.locator(".kpi__value").first).to_have_text("₹7,677", timeout=15000)
         pg.context.close()
     _()
 

@@ -15,6 +15,8 @@ export function errorText(t, err) {
   if (!err) return "";
   const kind = err.kind || "network";
   if (kind === "http") {
+    // 429 comes from the platform rate limit (Vercel Firewall), not the app.
+    if (err.status === 429) return t("errors.rateLimited");
     const base = t("errors.http", { status: err.status || "?" });
     return err.detail ? `${base} ${err.detail}` : base;
   }

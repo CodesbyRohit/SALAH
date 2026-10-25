@@ -11,6 +11,7 @@ BASELINE (pre-Phase-7) BEHAVIOUR — kept intentionally so Phase 7 has real work
 """
 import json
 import os
+import threading
 from datetime import datetime
 
 import database
@@ -27,6 +28,8 @@ except Exception:
 DATA_DIR = database.data_dir()
 LOG_PATH = DATA_DIR / "interactions.jsonl"
 _last_cognee_error: str | None = None
+# Serialises appends and the reset rewrite within this process.
+_log_lock = threading.Lock()
 
 
 def _cognee_ok() -> bool:
@@ -41,27 +44,33 @@ def _cognee_ok() -> bool:
     return True
 
 
-def store(question: str, answer: str, trace: dict | list | None = None) -> None:
-    """Persist one interaction. BASELINE: trace not stored."""
+def store(question: str, answer: str, trace: dict | list | None = None,
+          session: str | None = None) -> None:
+    """Persist one interaction. BASELINE: trace not stored.
+
+    ``session`` is a pseudonymous key (sessions.log_key), never the cookie
+    value. The Cognee path is not session-scoped; it is unused unless cognee
+    is installed and configured."""
     try:
         if _cognee_ok():
             cognee.add(f"Q: {question}\nA: {answer}")
         else:
-            _append_local(question, answer, trace)
+            _append_local(question, answer, trace, session)
     except Exception as e:
         global _last_cognee_error
         _last_cognee_error = str(e)
-        _append_local(question, answer, trace)
+        _append_local(question, answer, trace, session)
 
 
-def _append_local(question: str, answer: str, trace) -> None:
+def _append_local(question: str, answer: str, trace, session: str | None = None) -> None:
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": datetime.now().isoformat(),
+        "session": session,
         "question": question,
         "answer": answer,
     }
-    with LOG_PATH.open("a", encoding="utf-8") as f:
+    with _log_lock, LOG_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
@@ -81,8 +90,9 @@ def retrieve(query: str, limit: int = 3) -> list[dict]:
     return []
 
 
-def last_interactions(limit: int = 3) -> list[dict]:
-    """Direct read of the local log, newest first."""
+def last_interactions(limit: int = 3, session: str | None = None) -> list[dict]:
+    """Direct read of the local log, newest first; only ``session``'s entries
+    when a session key is given."""
     if not LOG_PATH.exists():
         return []
     entries = []
@@ -91,15 +101,37 @@ def last_interactions(limit: int = 3) -> list[dict]:
             line = line.strip()
             if line:
                 try:
-                    entries.append(json.loads(line))
+                    entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if session is None or (isinstance(entry, dict) and entry.get("session") == session):
+                    entries.append(entry)
     return list(reversed(entries))[:limit]
 
 
-def reset_conversation() -> None:
-    """Conversation reset only — persistent interaction memory survives."""
-    LOG_PATH.unlink(missing_ok=True)
+def reset_conversation(session: str) -> int:
+    """Remove one session's entries from the local log; other visitors'
+    entries are kept. Rewrites atomically. Returns how many were removed."""
+    with _log_lock:
+        if not LOG_PATH.exists():
+            return 0
+        kept, removed = [], 0
+        with LOG_PATH.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    kept.append(line)  # not ours to judge: keep unparseable lines
+                    continue
+                if isinstance(entry, dict) and entry.get("session") == session:
+                    removed += 1
+                else:
+                    kept.append(line)
+        if removed:
+            tmp = LOG_PATH.with_name(f".{LOG_PATH.name}.{os.getpid()}.tmp")
+            tmp.write_text("".join(kept), encoding="utf-8")
+            os.replace(tmp, LOG_PATH)
+        return removed
 
 
 def _count_local_log_entries() -> int:

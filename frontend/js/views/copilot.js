@@ -224,6 +224,7 @@ export function createCopilot({ store, t, actions }) {
       h("div", { class: "msg__head" }, h("span", { class: "msg__who", text: t("copilot.salah") }), sourceChip(meta)),
       h("p", { class: "msg__text", text: msg.text }),
       reason ? h("p", { class: "msg__reason" }, icon("info", 14), reason) : null,
+      meta.remembered === false ? h("p", { class: "msg__reason msg__reason--memory" }, icon("info", 14), t("copilot.notRemembered")) : null,
       h("div", { class: "msg__actions" }, evBtn, listenBtn),
       block,
     );

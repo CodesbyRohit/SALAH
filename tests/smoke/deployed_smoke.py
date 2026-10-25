@@ -9,9 +9,15 @@ directory. Nothing is mocked and nothing in the repository's data/ is used.
     python tests/smoke/deployed_smoke.py https://<deployment>.vercel.app --via vercel
     python tests/smoke/deployed_smoke.py https://salah-liart.vercel.app
 
---via vercel   send every request through `npx vercel curl`, the Vercel CLI's
-               authenticated path for protected deployments (needs
-               `npx vercel login`). Default: plain HTTPS (public deployments).
+--via oidc     plain HTTPS plus the short-lived VERCEL_OIDC_TOKEN as
+               x-vercel-trusted-oidc-idp-token, sent only to the target host.
+               Run under `npx vercel env run` from a directory linked to the
+               project. Preferred for protected previews: unlike `vercel curl`
+               it creates no deployment-protection bypass credential.
+--via vercel   send every request through `npx vercel curl`. Works with just
+               `npx vercel login`, but the CLI creates an automation bypass
+               credential on the project, which should be revoked afterwards.
+Default: plain HTTPS (public deployments).
 
 The POST checks write to the target's ephemeral interaction log and
 in-process conversation history, exactly like a real user would.
@@ -42,12 +48,18 @@ class Client:
         self.via = via
         self.scratch = scratch
         self.npx = shutil.which("npx.cmd") or shutil.which("npx")
+        self.headers = {}
+        if via == "oidc":
+            token = os.environ.get("VERCEL_OIDC_TOKEN")
+            if not token:
+                raise SystemExit("--via oidc needs VERCEL_OIDC_TOKEN (run under `npx vercel env run`)")
+            self.headers = {"x-vercel-trusted-oidc-idp-token": token}
 
     def request(self, method: str, path: str, body: bytes | None = None,
                 content_type: str = "application/json") -> tuple[int, dict, bytes]:
         url = self.base + path
-        if self.via == "direct":
-            req = urllib.request.Request(url, data=body, method=method)
+        if self.via in ("direct", "oidc"):
+            req = urllib.request.Request(url, data=body, method=method, headers=self.headers)
             if body is not None:
                 req.add_header("Content-Type", content_type)
             try:
@@ -123,7 +135,7 @@ def canonical(scratch: Path) -> tuple[dict, dict, dict]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("url")
-    ap.add_argument("--via", choices=["direct", "vercel"], default="direct")
+    ap.add_argument("--via", choices=["direct", "oidc", "vercel"], default="direct")
     args = ap.parse_args()
 
     scratch = Path(tempfile.mkdtemp(prefix="salah-smoke-"))

@@ -118,7 +118,7 @@ const actions = {
         id: ++msgSeq,
         role: "assistant",
         text: res.answer,
-        meta: { source: res.source, fallback_reason: res.fallback_reason, trace: res.trace, action: res.action, language: res.language || lang },
+        meta: { source: res.source, fallback_reason: res.fallback_reason, trace: res.trace, action: res.action, language: res.language || lang, remembered: res.remembered },
       };
       store.set({ messages: [...store.get().messages, msg], asking: false });
       voiceSend("answered");
