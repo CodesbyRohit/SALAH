@@ -25,6 +25,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 import analytics
 import cache as demo_cache
+import database
 import llm
 import memory
 
@@ -206,6 +207,7 @@ def health():
         "llm_available": llm.llm_available(),
         "memory": memory.status(),
         "cache_entries": demo_cache.cache_size(),
+        "database": database.status(),
         "voice": {
             "available": bool(get_sarvam_key()),
             "languages": sorted(SARVAM_LANG_MAP),
@@ -220,6 +222,11 @@ def context():
     """Return the current merchant context."""
     try:
         return analytics.build_merchant_context()
+    except database.DatabaseUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Merchant data unavailable: {exc}",
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -241,6 +248,11 @@ def insights():
             "trace": analytics.build_trace(merchant_context),
             "action": analytics.get_recommended_action(merchant_context),
         }
+    except database.DatabaseUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Merchant data unavailable: {exc}",
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -264,6 +276,12 @@ def ask(req: AskRequest):
 
     try:
         merchant_context = analytics.build_merchant_context()
+    except database.DatabaseUnavailable as exc:
+        # No data means no honest answer: report it instead of a degraded one.
+        raise HTTPException(
+            status_code=503,
+            detail=f"Merchant data unavailable: {exc}",
+        ) from exc
     except Exception:
         merchant_context = {}
 
@@ -347,6 +365,11 @@ def nudge(req: NudgeRequest):
 
     try:
         merchant_context = analytics.build_merchant_context()
+    except database.DatabaseUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Merchant data unavailable: {exc}",
+        ) from exc
     except Exception:
         merchant_context = {}
 
