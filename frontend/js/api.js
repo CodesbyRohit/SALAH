@@ -123,6 +123,8 @@ export function normalizeAnswer(raw) {
     source: isStr(raw.source) ? raw.source : null,
     fallback_reason: isStr(raw.fallback_reason) ? raw.fallback_reason : null,
     language: isStr(raw.language) ? raw.language : null,
+    // Only an explicit false means "not kept"; older servers omit the field.
+    remembered: raw.remembered === false ? false : null,
   };
 }
 

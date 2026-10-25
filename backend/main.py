@@ -3,6 +3,7 @@ SALAH — backend entrypoint (FastAPI).
 """
 
 import base64
+import hashlib
 import logging
 import os
 import sys
@@ -111,6 +112,24 @@ def visitor_session(request: Request, response: Response) -> str:
             secure=request.url.scheme == "https" or forwarded == "https",
         )
     return session_id
+
+
+def trusted_proxy() -> bool:
+    """On Vercel the platform sets the client address headers; anywhere else
+    they are client-controlled and are not trusted."""
+    return bool(os.getenv("VERCEL"))
+
+
+def client_key(request: Request) -> str:
+    """Pseudonymous per-client key for the per-client session cap. Clients
+    behind one shared address (campus Wi-Fi, carrier NAT) share the cap."""
+    address = ""
+    if trusted_proxy():
+        address = (request.headers.get("x-real-ip")
+                   or request.headers.get("x-forwarded-for", "").split(",")[0]).strip()
+    if not address and request.client:
+        address = request.client.host
+    return hashlib.sha256((address or "unknown").encode()).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +318,7 @@ def insights():
 
 
 @app.post("/ask")
-def ask(req: AskRequest, session_id: str = Depends(visitor_session)):
+def ask(req: AskRequest, request: Request, session_id: str = Depends(visitor_session)):
     """Answer a merchant question using SALAH's intelligence layer."""
 
     question = req.question.strip()[:MAX_QUESTION_LENGTH]
@@ -328,6 +347,13 @@ def ask(req: AskRequest, session_id: str = Depends(visitor_session)):
             detail="Failed to build merchant context",
         ) from exc
 
+    # A new session is refused rather than making room by evicting anyone:
+    # the question is still answered, without memory, and the response says so.
+    admission = conversations.admit(session_id, client_key(request))
+    remembered = admission == sessions.ADMITTED
+    if not remembered:
+        log.warning("conversation not remembered: %s", admission)
+
     trace = None
     action = None
     source = "cache"
@@ -347,7 +373,7 @@ def ask(req: AskRequest, session_id: str = Depends(visitor_session)):
         recommendation = llm.explain_recommendation(
             question,
             merchant_context,
-            history=conversations.history(session_id),
+            history=conversations.history(session_id) if remembered else [],
             language=language,
         )
 
@@ -367,11 +393,12 @@ def ask(req: AskRequest, session_id: str = Depends(visitor_session)):
             )
 
     # This visitor's history only (bounded by the store).
-    conversations.append(
-        session_id,
-        {"role": "user", "text": question},
-        {"role": "assistant", "text": answer},
-    )
+    if remembered:
+        remembered = conversations.append(
+            session_id,
+            {"role": "user", "text": question},
+            {"role": "assistant", "text": answer},
+        )
 
     # Persist the interaction in SALAH's memory layer, tagged so this
     # visitor's /reset can remove it without touching anyone else's.
@@ -389,6 +416,9 @@ def ask(req: AskRequest, session_id: str = Depends(visitor_session)):
         "source": source,
         "fallback_reason": fallback_reason,
         "language": language,
+        # False when the server could not keep this conversation (capacity);
+        # the answer itself is unaffected.
+        "remembered": remembered,
     }
 
 

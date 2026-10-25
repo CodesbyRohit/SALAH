@@ -261,6 +261,7 @@ class VoiceAndResetContractTests(_ClientCase):
     def test_reset_clears_only_the_callers_conversation(self):
         self.client.post("/ask", json={"question": "kya karun?", "language": "en"})
         sid = self.client.cookies.get(main.sessions.COOKIE_NAME)
+        main.conversations.admit("someone-elses-session-id-0123456789ab", "another-client")
         main.conversations.append("someone-elses-session-id-0123456789ab", {"role": "user", "text": "theirs"})
         res = self.client.post("/reset")
         self.assertEqual(res.json(), {"ok": True})

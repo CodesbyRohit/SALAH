@@ -366,6 +366,30 @@ def suite(run: Run, ctx: dict, ins: dict):
         page.allow_http_errors = False
         page.locator(".msg--error").last.get_by_role("button", name="Retry").click()
         expect(page.locator(".msg--error")).to_have_count(0)
+        page.wait_for_selector(".msg--thinking", state="detached")  # let the retried answer land
+    _()
+
+    @check("an answer the server could not remember says so (capacity)")
+    def _():
+        def not_remembered(route):
+            resp = route.fetch(headers=run.headers(route.request))
+            data = resp.json()
+            data["remembered"] = False
+            route.fulfill(response=resp, json=data)
+        page.wait_for_selector(".msg--thinking", state="detached")
+        page.route("**/ask", not_remembered)
+        try:
+            page.locator("#composer-input").fill("capacity probe")
+            page.locator("#composer-input").press("Enter")
+            msg = page.locator(".msg--assistant").last
+            expect(msg).to_contain_text("Total revenue")
+            expect(msg.locator(".msg__reason--memory")).to_contain_text("won't be remembered")
+        finally:
+            page.unroute("**/ask")
+        page.locator("#composer-input").fill("normal question")
+        page.locator("#composer-input").press("Enter")
+        page.wait_for_selector(".msg--thinking", state="detached")
+        expect(page.locator(".msg--assistant").last.locator(".msg__reason--memory")).to_have_count(0)
     _()
 
     @check("voice is honestly unavailable without a Sarvam key (real backend)")

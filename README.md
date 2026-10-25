@@ -47,7 +47,7 @@ Payment data (SQLite)
 | `GET /api/health` | `status`, `llm_available`, `voice {available, languages}`, `languages`, `memory`, `cache_entries`, `time` |
 | `GET /context` | deterministic merchant metrics (`weekly_revenue`, `revenue_by_hour`, `weakest_weekday`, `lapsed_regulars`, `ticket_trend`, `evening_share`, `weekday_profile`, `generated_at`) |
 | `GET /insights` | the deterministic evidence `trace` (each item: `signal`, `value`, `implication`, `source`, `confidence`, `window`) and the one recommended `action` (`priority`, `observed`, `hypothesis`, `experiment`, `baseline`, `measure`, `confounders`, `unknown`, `basis`, `weeks`), straight from `analytics.py` (no LLM) |
-| `POST /ask` `{question, language}` | `answer`, `trace`, `action`, `source` (`llm` / `deterministic` / `cache`), `fallback_reason`, `language` |
+| `POST /ask` `{question, language}` | `answer`, `trace`, `action`, `source` (`llm` / `deterministic` / `cache`), `fallback_reason`, `language`, `remembered` (false when the server could not keep the conversation) |
 | `POST /nudge` `{force, language}` | `nudge`, `language`, generated on request |
 | `POST /voice/stt` (multipart `file`) | `{text}`; `415` unless the upload is `audio/*`, `413` above 5 MB, `503` when Sarvam is not configured |
 | `POST /voice/tts` `{text, language}` | audio bytes; `413` above 2,500 characters, `503` when unavailable or the language is not `en`/`hi` |
@@ -248,13 +248,13 @@ always mocks (Sarvam, `/reset`).
 # API smoke: health, /context and /insights compared with the dataset regenerated
 # locally from source, /ask and /nudge (valid and invalid input), static files.
 python tests\smoke\deployed_smoke.py https://salah-liart.vercel.app
-# Protected preview: send each request through the Vercel CLI (npx vercel login first)
-python tests\smoke\deployed_smoke.py https://<preview>.vercel.app --via vercel
-
-# Browser E2E against a deployment. For a protected preview, run it from a
-# directory linked to the project (npx vercel link) under `vercel env run`, which
-# supplies a short-lived VERCEL_OIDC_TOKEN; the suite sends it only to that origin.
+# Protected previews: run from a directory linked to the project (npx vercel link)
+# under `vercel env run`, which supplies a short-lived VERCEL_OIDC_TOKEN; both
+# tools send it only to the target origin and never print it.
+npx vercel env run -- python <repo>\tests\smoke\deployed_smoke.py https://<preview>.vercel.app --via oidc
 npx vercel env run -- python <repo>\tests\e2e\e2e_ui.py --base-url https://<preview>.vercel.app
+# `--via vercel` (npx vercel curl) also works, but the CLI then creates an
+# automation bypass credential on the project; revoke it afterwards.
 ```
 
 - `tests/test_api_contract.py` — `/insights` equals the deterministic engine;
@@ -320,8 +320,9 @@ a stub), authentication.
 - Fonts load from Google Fonts; offline, system fonts are used instead.
 - Conversation history is per visitor (session cookie) but in memory: on
   serverless a request served by another instance starts with an empty history.
-- The API has no authentication; rate limiting is a Vercel Firewall rule that is
-  drafted below but not yet applied (see *Security posture*).
+  At capacity new visitors are answered without memory (see *Security posture*).
+- The API has no authentication; the Vercel Firewall rate limit is staged as a
+  draft but not published.
 
 ## Security posture
 
@@ -339,34 +340,43 @@ edge (browsers still revalidate with `max-age=0`); API responses are not cached.
 
 **Visitor isolation.** Each browser gets a random session id in an HttpOnly,
 SameSite=Lax cookie (Secure over HTTPS); there is no login. Conversation
-history is kept per session in memory (last 20 turns, at most 1,000 sessions,
-2 h idle expiry), so one visitor's questions never reach another visitor's
-model context. `/reset` clears only the caller's history and the caller's
-entries in the local interaction log. Log entries carry a hash of the session
-id, never the cookie value. `tests/test_sessions.py` covers this with two
-independent clients.
+history is kept per session in memory (last 20 turns, 2 h idle expiry), so one
+visitor's questions never reach another visitor's model context. `/reset`
+clears only the caller's history and the caller's entries in the local
+interaction log. Log entries carry a hash of the session id, never the cookie
+value. The cookie is a bearer credential: whoever holds it shares that
+browser's conversation.
 
-**Rate limiting (drafted, not applied).** In-app limits only count requests on
-one serverless instance, so the limit belongs in the Vercel Firewall. The
-frontend already explains a `429`. Proposed rule, 30 POSTs per minute per IP on
-the endpoints that do work or call paid providers. Check rate-limit
-availability on the project's plan, then stage, review and publish it:
+**Capacity never costs an existing visitor their history.** Only expired
+sessions are removed. A *new* session is refused when the store holds 1,000
+live sessions, or when one client address already holds 20; the question is
+still answered, without memory, and `/ask` returns `"remembered": false` (the
+UI says so). Client addresses come from Vercel's headers only when running on
+Vercel; elsewhere those headers are ignored. Visitors behind one shared
+address (campus Wi-Fi, carrier NAT) share the 20-session cap, and on
+serverless the caps are counted per instance, not globally.
+`tests/test_sessions.py` covers isolation with independent clients and the
+1,000-session flood from distinct addresses.
+
+**Rate limiting (draft staged, not published).** In-app limits only count
+requests on one serverless instance, so the limit belongs in the Vercel
+Firewall; the frontend already explains a `429`. On the current plan only one
+rate-limit rule could be staged (further rules were refused: "Rate limiting is
+not available for this plan"), so the staged draft covers the endpoints that
+can reach a paid model: 30 POSTs per minute per IP on `^/(ask|nudge)$`.
+`/reset` and `/voice/*` are not rate limited. Whether the plan enforces the
+staged rule is only known once it is published, which affects production:
 
 ```powershell
-npx vercel firewall rules add "SALAH API rate limit" --project salah `
-  --condition '{"type":"method","op":"eq","value":"POST"}' `
-  --condition '{"type":"path","op":"re","value":"^/(ask|nudge|reset|voice/(stt|tts))$"}' `
-  --action rate_limit --rate-limit-requests 30 --rate-limit-window 60 `
-  --rate-limit-keys ip --rate-limit-action rate_limit `
-  --description "Per-IP limit on SALAH API endpoints"
-npx vercel firewall diff      # review the staged draft
-npx vercel firewall publish   # makes it live for the project
+npx vercel firewall diff      # one pending change: "SALAH ask and nudge rate limit"
+npx vercel firewall publish   # makes it live for the whole project, production included
+npx vercel firewall discard   # drops the draft
 ```
 
 | | Public synthetic demo (today) | Real merchant data (future) |
 |---|---|---|
 | Access | Public, no login: the data is synthetic | Per-merchant authentication; data scoped by merchant id |
-| Abuse / spend | Keep `GEMINI_API_KEY` unset until the Firewall rate limit above is published | Per-merchant quotas and provider budget alerts |
+| Abuse / spend | Keep `GEMINI_API_KEY` unset until the Firewall rate limit above is published and enforcement is confirmed | Per-merchant quotas and provider budget alerts |
 | Conversation | Per visitor (session cookie), in memory, per instance | History keyed by authenticated user, persisted |
 | `/reset` | Clears only the caller's session and log entries | Same, plus audit trail |
 | Storage | Ephemeral `/tmp` SQLite | Managed database with backups, encryption at rest, retention policy |
