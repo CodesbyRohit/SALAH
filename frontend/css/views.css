@@ -252,6 +252,17 @@
   line-height: 1.55;
 }
 
+.q-card__measure {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.q-card__measure strong {
+  color: var(--text-1);
+  font-weight: 650;
+}
+
 .fact-list {
   display: grid;
   gap: var(--sp-3);
@@ -553,6 +564,44 @@
 .rec__status-note {
   font-size: var(--fs-sm);
   color: var(--text-2);
+}
+
+/* Experiment lifecycle. Only "Proposed" can be current: SALAH records no
+   runs or results. The current stage is marked by weight, border and
+   aria-current, not by colour alone. */
+.rec__stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: stage;
+}
+
+.rec__stage {
+  counter-increment: stage;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 3px 10px;
+  border: 1px dashed var(--line-3);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.rec__stage::before {
+  content: counter(stage) ".";
+  font-family: var(--font-mono);
+}
+
+.rec__stage.is-current {
+  border-style: solid;
+  border-color: var(--accent-line);
+  background: var(--accent-wash);
+  color: var(--text-1);
+  font-weight: 700;
 }
 
 .rec__list {

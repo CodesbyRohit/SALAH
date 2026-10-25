@@ -315,6 +315,44 @@ class PipelineTests(unittest.TestCase):
             out = self.run_pipeline(fake_transport(bad))
         self.assertEqual(out["rejections"][0]["reason"], llm.R_UNSUPPORTED_CLAIM)
 
+    def test_claimed_experiment_outcome_is_rejected(self):
+        # No experiment result exists anywhere in SALAH, so "it worked" is
+        # unsupported even without a single invented number.
+        for claim in (
+            "The reactivation offer worked and the lapsed regulars came back.",
+            "Your win-back campaign has succeeded.",
+            "Offer ke baad regular customers wapas aa gaye.",
+            "La campaña funcionó.",
+        ):
+            bad = valid_model_output()
+            bad["answer"] = claim
+            with llm_enabled():
+                out = self.run_pipeline(fake_transport(bad))
+            self.assertEqual(out["source"], "deterministic", claim)
+            self.assertEqual(out["rejections"][0]["reason"], llm.R_OUTCOME_CLAIM, claim)
+
+    def test_hypothetical_or_negated_outcomes_are_allowed(self):
+        for ok in (
+            "Try one reactivation attempt; it could bring some regulars back.",
+            "The experiment has not been measured, so we cannot say it worked.",
+        ):
+            good = valid_model_output()
+            good["answer"] = ok
+            with llm_enabled():
+                out = self.run_pipeline(fake_transport(good))
+            self.assertEqual(out["source"], "llm", (ok, out["rejections"]))
+
+    def test_provider_http_errors_fall_back_without_echoing_the_key(self):
+        import requests
+        for code in (401, 403, 429, 500, 503):
+            response = requests.Response()
+            response.status_code = code
+            with llm_enabled():
+                out = self.run_pipeline(fake_transport(exc=requests.HTTPError(f"{code} error", response=response)))
+            self.assertEqual((out["source"], out["fallback_reason"]), ("deterministic", "llm_error"), code)
+            self.assertTrue(out["answer"])
+            self.assertNotIn("test-key", llm.status()["last_error"] or "")
+
     def test_invented_customer_is_rejected(self):
         bad = valid_model_output()
         bad["answer"] = "Customer C999 4 hafte se nahi aaya."
@@ -537,6 +575,159 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(list(llm.CONFIDENCE_LEVELS),
                          ["FACT", "PATTERN", "HYPOTHESIS", "UNKNOWN"])
         self.assertNotRegex(json.dumps(llm.status()), re.escape("test-key"))
+
+
+def direction_context(change_pct=-11.5, early=35.1, recent=31.06) -> dict:
+    """sample_context plus the fields the direction authorities read."""
+    ctx = sample_context()
+    ctx["ticket_trend"] = {"early_avg_ticket": early, "recent_avg_ticket": recent,
+                           "change_pct": change_pct, "weeks": 12}
+    ctx["lapsed_regulars"]["weeks"] = 4
+    wp = ctx["weekday_profile"]
+    wp["overall_avg_tx_per_active_day"] = 4.3
+    wp["days"]["Monday"] = {"days_in_window": 8, "avg_daily_revenue": 116.14, "avg_tx_per_active_day": 4.1}
+    wp["days"]["Thursday"] = {"days_in_window": 8, "avg_daily_revenue": 216.5, "avg_tx_per_active_day": 6.0}
+    return ctx
+
+
+class DirectionalClaimTests(unittest.TestCase):
+    """Directional wording is checked against the deterministic comparison
+    that defines each metric, not just against the presence of its numbers."""
+
+    def problem(self, sentence, ctx=None):
+        return llm.direction_problem(sentence, llm.direction_authorities(ctx or direction_context()))
+
+    def assertSupported(self, sentence, ctx=None):
+        self.assertIsNone(self.problem(sentence, ctx), sentence)
+
+    def assertRejected(self, sentence, ctx=None):
+        self.assertIsNotNone(self.problem(sentence, ctx), sentence)
+
+    def test_correct_decrease_is_accepted(self):
+        for s in ("Average ticket fell from 35.1 to 31.06.",
+                  "Average ticket went from 35.1 to 31.06.",
+                  "Average ticket 35.1 se 31.06 ho gaya.",
+                  "El ticket medio bajó de 35.1 a 31.06.",
+                  "The average ticket is lower over the last 6 weeks."):
+            self.assertSupported(s)
+
+    def test_reversed_direction_is_rejected(self):
+        for s in ("Your average ticket increased from 31.06 to 35.1.",
+                  "Average ticket went from 31.06 to 35.1.",  # direction implied by the order alone
+                  "Average ticket rose.",
+                  "औसत टिकट बढ़ा।"):
+            self.assertRejected(s)
+
+    def test_correct_increase_is_accepted_and_its_reverse_rejected(self):
+        ctx = direction_context(change_pct=8.0, early=30.0, recent=32.4)
+        self.assertSupported("Average ticket rose from 30.0 to 32.4.", ctx)
+        self.assertRejected("Average ticket fell from 32.4 to 30.0.", ctx)
+
+    def test_unchanged_value_supports_only_no_change(self):
+        ctx = direction_context(change_pct=0.0, early=31.0, recent=31.0)
+        self.assertSupported("Average ticket stayed unchanged.", ctx)
+        self.assertRejected("Average ticket fell.", ctx)
+        self.assertRejected("Average ticket increased.", ctx)
+
+    def test_change_that_rounds_to_zero_is_not_a_direction(self):
+        ctx = direction_context(change_pct=0.04, early=31.0, recent=31.01)
+        self.assertRejected("Average ticket increased.", ctx)
+
+    def test_ambiguous_comparisons_are_rejected(self):
+        for s in ("Tuesday is lower than Thursday.",          # two weekdays
+                  "Average ticket rose and then fell.",       # two directions
+                  "Average ticket and revenue fell.",         # two subjects
+                  "Average ticket fell this week.",           # period the comparison does not cover
+                  "Average ticket fell over the last 4 weeks.",
+                  "The average ticket is the lowest ever."):   # superlative with nothing to compare
+            self.assertRejected(s)
+
+    def test_missing_metrics_never_yield_a_direction(self):
+        ctx = direction_context()
+        del ctx["ticket_trend"]
+        self.assertRejected("Average ticket fell.", ctx)
+        ctx = direction_context()
+        del ctx["weekday_profile"]
+        self.assertRejected("Tuesday revenue is below the overall average.", ctx)
+        ctx = direction_context()
+        ctx["lapsed_regulars"] = {"count": 0, "customers": []}
+        self.assertRejected("Regular customers dropped off.", ctx)
+
+    def test_weekday_levels_are_checked_against_the_overall_average(self):
+        self.assertSupported("Tuesday revenue is below the overall average.")
+        self.assertSupported("Tuesday is the weakest day.")
+        self.assertSupported("Mangalwar ki kamai sabse kam hai.")
+        self.assertSupported("मंगलवार की कमाई औसत से कम है।")
+        self.assertSupported("Tuesday sees fewer payments than average.")   # payments measure
+        self.assertSupported("Thursday is the strongest day.")
+        self.assertRejected("Tuesday revenue is above average.")
+        self.assertRejected("Thursday is the weakest day.")
+        self.assertRejected("Tuesday revenue fell.")  # no weekday-over-time comparison exists
+
+    def test_revenue_and_customer_directions(self):
+        self.assertRejected("Revenue increased.")       # no period-over-period revenue comparison
+        self.assertRejected("Sales went down.")
+        self.assertSupported("Regular customers dropped off.")
+        self.assertRejected("Regular customers increased.")
+
+    def test_negated_claims_must_not_contradict(self):
+        self.assertSupported("Average ticket did not increase.")
+        self.assertRejected("Average ticket did not fall.")
+
+    def test_hypothetical_wording_and_plain_facts_are_left_alone(self):
+        for s in ("Test an offer and see whether return visits improve.",
+                  "A change on Tuesdays could raise Tuesday revenue.",
+                  "If the average ticket rises, keep the offer.",
+                  "38.3% of revenue comes between 18:00 and 22:00.",
+                  "Payment data does not show why this happened.",
+                  "Tuesday ko kam se kam 2 payment aaye."):  # "kam se kam" = "at least", not "lower"
+            self.assertSupported(s)
+
+    def test_proposals_are_not_claims(self):
+        for s in ("Keep all other days unchanged and compare the tested Tuesdays.",
+                  "Salah suggestion: hold a group of still-regular customers unchanged as control.",
+                  "How to measure: how many lapsed customers pay again, versus the unchanged control group.",
+                  "Test one paired-item offer to raise the average ticket."):
+            self.assertSupported(s)
+        # ...but a factual claim inside the same vocabulary is still checked.
+        self.assertRejected("Regular customers stayed unchanged.")
+
+    def test_salah_own_deterministic_answers_pass_the_rule(self):
+        # A model that faithfully restates the evidence must never be rejected.
+        ctx = direction_context()
+        sanitized, _ = llm.sanitize_context(ctx)
+        trace, action = analytics.build_trace(sanitized), analytics.get_recommended_action(sanitized)
+        auth = llm.direction_authorities(sanitized)
+        for lang in ("en", "hi", "es", "fr", "hinglish"):
+            for s in llm._sentences(llm.deterministic_explanation(sanitized, trace, action, language=lang)):
+                self.assertIsNone(llm.direction_problem(s, auth), (lang, s))
+        for item in trace:
+            self.assertIsNone(llm.direction_problem(str(item["value"]), auth), item["value"])
+
+    def test_rejected_direction_falls_back_once_to_the_deterministic_answer(self):
+        ctx = direction_context()
+        trace = analytics.build_trace(ctx)
+        action = analytics.get_recommended_action(ctx)
+        bad = valid_model_output()
+        bad["answer"] = "Your average ticket increased from 31.06 to 35.1."
+        transport = fake_transport(bad)
+        with llm_enabled():
+            out = llm.explain_recommendation("kya karun?", ctx, trace, action, transport=transport)
+        self.assertEqual(len(transport.calls), 1)  # no second, unvalidated model attempt
+        self.assertEqual(out["source"], "deterministic")
+        self.assertEqual(out["fallback_reason"], f"rejected:{llm.R_UNSUPPORTED_DIRECTION}")
+        self.assertNotIn("increased from 31.06 to 35.1", out["answer"])
+        sanitized, _ = llm.sanitize_context(ctx)
+        self.assertEqual(out["answer"], llm.deterministic_explanation(sanitized, out["trace"], out["action"], language="hinglish"))
+
+    def test_a_correct_directional_answer_still_passes_end_to_end(self):
+        ctx = direction_context()
+        good = valid_model_output()
+        good["answer"] = "Average ticket fell from 35.1 to 31.06. Tuesday revenue is below the overall average."
+        with llm_enabled():
+            out = llm.explain_recommendation("kya karun?", ctx, analytics.build_trace(ctx),
+                                             analytics.get_recommended_action(ctx), transport=fake_transport(good))
+        self.assertEqual(out["source"], "llm", out["rejections"])
 
 
 if __name__ == "__main__":

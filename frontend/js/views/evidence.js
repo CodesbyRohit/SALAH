@@ -66,6 +66,7 @@ export function createEvidence({ store, t, actions }) {
           { class: "trace-row__detail" },
           h("div", null, h("dt", { text: t("evidence.value") }), h("dd", { class: "mono", lang: "en", text: item.value })),
           h("div", null, h("dt", { text: t("evidence.implication") }), h("dd", { lang: "en", text: item.implication || "—" })),
+          item.window ? h("div", null, h("dt", { text: t("evidence.window") }), h("dd", { lang: "en", text: item.window })) : null,
           h("div", null, h("dt", { text: t("evidence.source") }), h("dd", null, h("code", { text: item.source || "—" }))),
         ),
       ),
@@ -97,12 +98,24 @@ export function createEvidence({ store, t, actions }) {
         h("strong", { text: t("evidence.rec.status") }),
       ),
       h("p", { class: "rec__status-note", text: t("evidence.rec.statusNote") }),
+      // Lifecycle: SALAH records no experiment runs or results, so only the
+      // first stage can ever be current here.
+      h(
+        "ol",
+        { class: "rec__stages", "aria-label": t("evidence.rec.stages.label") },
+        ["proposed", "running", "measured"].map((s, i) =>
+          h("li", { class: `rec__stage${i === 0 ? " is-current" : ""}`, "aria-current": i === 0 ? "step" : null, text: t(`evidence.rec.stages.${s}`) }),
+        ),
+      ),
       h(
         "dl",
         { class: "rec__list" },
         row(t("evidence.rec.observed"), action.observed),
+        row(t("evidence.rec.hypothesis"), action.hypothesis),
         row(t("evidence.rec.experiment"), action.experiment),
+        row(t("evidence.rec.baseline"), action.baseline),
         row(t("evidence.rec.measure"), action.measure),
+        row(t("evidence.rec.confounders"), action.confounders),
         row(t("evidence.rec.unknown"), action.unknown),
         row(t("evidence.rec.basis"), action.basis),
       ),

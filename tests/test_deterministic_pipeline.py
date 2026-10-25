@@ -74,11 +74,11 @@ class DeterministicEngineTests(unittest.TestCase):
         self.assertEqual(analytics.get_recommended_action(self.context), self.action)
 
     # --- Phase 2: trace structure ---------------------------------------
-    def test_every_trace_item_has_the_five_fields(self):
+    def test_every_trace_item_has_the_six_fields(self):
         self.assertTrue(self.trace)
         for item in self.trace:
             self.assertEqual(
-                set(item), {"signal", "value", "implication", "source", "confidence"}
+                set(item), {"signal", "value", "implication", "source", "confidence", "window"}
             )
             self.assertIn(item["confidence"], llm.CONFIDENCE_LEVELS)
 
@@ -97,13 +97,15 @@ class DeterministicEngineTests(unittest.TestCase):
 
         weekly = [w["revenue"] for w in self.context["weekly_revenue"]]
         total = round(sum(weekly), 2)
-        permitted |= {total, round(total / len(weekly), 2)}
+        # Average over the window length; the calendar-week row count (which
+        # includes a partial first week) is not a valid denominator.
+        permitted |= {total, round(total / self.context["weekday_profile"]["weeks"], 2)}
 
         ww = self.context["weakest_weekday"]
         permitted.add(round(ww["avg_daily_revenue"] / ww["overall_avg_daily_revenue"] * 100, 1))
 
         for item in self.trace:
-            for value in (item["value"], item["implication"]):
+            for value in (item["value"], item["implication"], item["window"]):
                 for number in numbers(str(value)):
                     self.assertIn(
                         number, permitted,

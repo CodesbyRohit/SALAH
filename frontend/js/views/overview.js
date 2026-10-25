@@ -98,13 +98,14 @@ export function createOverview({ store, t, actions }) {
       );
     }
     if (ctx?.lapsed_regulars) facts.push(t("overview.facts.lapsed", { count: ctx.lapsed_regulars.count }));
-    if (ctx?.ticket_trend) {
+    if (ctx?.ticket_trend && Number.isInteger(ctx.ticket_trend.weeks)) {
       const tt = ctx.ticket_trend;
       facts.push(
         t("overview.facts.ticket", {
           early: fmt.money(tt.early_avg_ticket, lang),
           recent: fmt.money(tt.recent_avg_ticket, lang),
           change: fmt.percent(tt.change_pct, lang, { signed: true }),
+          half: tt.weeks / 2,
         }),
       );
     }
@@ -151,6 +152,9 @@ export function createOverview({ store, t, actions }) {
           ? [
               h("p", { class: "q-card__strong", text: t(`evidence.rec.priority.${action.priority}`) || action.priority }),
               action.experiment ? h("p", { class: "engine-text", lang: "en", text: action.experiment }) : null,
+              action.measure
+                ? h("p", { class: "q-card__measure" }, h("strong", { text: `${t("overview.q3Measure")}: ` }), h("span", { lang: "en", text: action.measure }))
+                : null,
               Number.isInteger(action.weeks) && action.weeks > 0
                 ? h("p", { class: "muted small", text: t("overview.q3Review", { weeks: action.weeks }) })
                 : null,
@@ -210,20 +214,31 @@ export function createOverview({ store, t, actions }) {
       tile(
         t("overview.kpi.ticket"),
         tt ? fmt.money(tt.recent_avg_ticket, lang) : null,
-        tt ? t("overview.kpi.ticketSub", { early: fmt.money(tt.early_avg_ticket, lang), change: fmt.percent(tt.change_pct, lang, { signed: true }) }) : null,
-        ticketDelta,
+        // Without the window the comparison has no stated period: omit it.
+        tt && Number.isInteger(tt.weeks)
+          ? t("overview.kpi.ticketSub", { half: tt.weeks / 2, early: fmt.money(tt.early_avg_ticket, lang), change: fmt.percent(tt.change_pct, lang, { signed: true }) })
+          : null,
+        tt && Number.isInteger(tt.weeks) ? ticketDelta : null,
       ),
       tile(
         t("overview.kpi.evening"),
         es ? fmt.percent(es.evening_share_pct, lang) : null,
-        es ? t("overview.kpi.eveningSub", { amount: fmt.money(es.evening_revenue, lang) }) : null,
+        es && Number.isInteger(es.weeks) ? t("overview.kpi.eveningSub", { amount: fmt.money(es.evening_revenue, lang), weeks: es.weeks }) : null,
       ),
       tile(
         t("overview.kpi.weakest"),
         ww ? fmt.weekday(ww.weekday, lang) : null,
         ww ? t("overview.kpi.weakestSub", { avg: fmt.money(ww.avg_daily_revenue, lang), overall: fmt.money(ww.overall_avg_daily_revenue, lang) }) : null,
       ),
-      tile(t("overview.kpi.lapsed"), lr ? fmt.number(lr.count, lang, 0) : null, lr ? t("overview.kpi.lapsedSub") : null),
+      tile(
+        t("overview.kpi.lapsed"),
+        lr ? fmt.number(lr.count, lang, 0) : null,
+        lr
+          ? lr.regular_min_visits && lr.regular_min_span_days && lr.weeks
+            ? t("overview.kpi.lapsedRule", { visits: lr.regular_min_visits, days: lr.regular_min_span_days, weeks: lr.weeks })
+            : t("overview.kpi.lapsedSub")
+          : null,
+      ),
     );
   }
 
