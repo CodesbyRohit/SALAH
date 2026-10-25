@@ -3,16 +3,29 @@
 > "Paytm already tells merchants what happened. Salah tells them what changed,
 > what to try next, and whether it worked."
 
-## Run
+## Run (Windows PowerShell)
 
-```bash
-cd salah
-python -m venv .venv && source .venv/Scripts/activate   # Windows Git Bash
+Requires Python 3.10+ (developed on 3.13). Node.js is **not** needed to run the app.
+
+```powershell
+cd SALAH
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1          # if blocked: Set-ExecutionPolicy -Scope Process Bypass
 pip install -r requirements.txt
-cp .env.example .env      # add GEMINI_API_KEY / SARVAM_API_KEY (optional)
-python data/seed.py       # generate data/merchant.db
-python backend/main.py    # http://localhost:8000
+python data\seed.py                     # only if data\merchant.db is missing — it recreates the DB
+python backend\main.py                  # http://localhost:8000
 ```
+
+Optional integrations are read from the process environment at request time
+(the app does not load `.env` itself). Set them in the same PowerShell session
+before starting the server:
+
+```powershell
+$env:GEMINI_API_KEY = "..."   # validated AI explanations; unset = deterministic-only
+$env:SARVAM_API_KEY = "..."   # voice: speech-to-text and spoken answers (en, hi)
+```
+
+Git Bash equivalent: `source .venv/Scripts/activate`, `export GEMINI_API_KEY=...`.
 
 ## Architecture
 
@@ -26,11 +39,71 @@ Payment data (SQLite)
   → Memory (Cognee + local JSONL fallback)
 ```
 
-- `/context` — deterministic merchant metrics
-- `/ask` — question → answer (+trace)
-- `/nudge` — proactive message
-- `/voice/stt`, `/voice/tts` — Sarvam voice
-- `/reset` — clear conversation
+| Endpoint | Returns |
+|---|---|
+| `GET /api/health` | `status`, `llm_available`, `voice {available, languages}`, `languages`, `memory`, `cache_entries`, `time` |
+| `GET /context` | deterministic merchant metrics (`weekly_revenue`, `revenue_by_hour`, `weakest_weekday`, `lapsed_regulars`, `ticket_trend`, `evening_share`, `weekday_profile`, `generated_at`) |
+| `GET /insights` | the deterministic evidence `trace` and the one recommended `action`, straight from `analytics.py` (no LLM) |
+| `POST /ask` `{question, language}` | `answer`, `trace`, `action`, `source` (`llm` / `deterministic` / `cache`), `fallback_reason`, `language` |
+| `POST /nudge` `{force, language}` | `nudge`, `language`, generated on request |
+| `POST /voice/stt` (multipart `file`) | `{text}`; `503` when Sarvam is not configured |
+| `POST /voice/tts` `{text, language}` | audio bytes; `503` when unavailable or the language is not `en`/`hi` |
+| `POST /reset` | clears the conversation and the local interaction log |
+
+## Frontend — merchant intelligence workspace
+
+`frontend/` is a build-free app served by FastAPI's `StaticFiles` (same origin
+as the API), so it deploys exactly like the backend with no Node build step.
+
+```
+frontend/
+  index.html            shell: rail / topbar / mobile tab bar, dialog, canvas
+  css/                  tokens.css (design tokens) · base · shell · components · views
+  js/app.js             bootstrap, hash routing, data loading, actions
+  js/api.js             the only place that calls the API; validates every response
+  js/store.js           tiny observable store (views subscribe to the keys they render)
+  js/i18n.js            UI strings for en / hi / es / fr
+  js/format.js          presentation-only formatting (₹, %, dates, weekdays)
+  js/charts.js          accessible SVG charts with keyboard tooltips and table twins
+  js/voice.js           MediaRecorder capture → /voice/stt, /voice/tts playback
+  js/voice-machine.js   pure voice state machine (ready → recording → … → playing)
+  js/views/             overview · evidence · copilot · updates · system
+  js/scene/stage.js     3D lifecycle: mode selection, lazy load, fallbacks, framing
+  js/scene/core.js      the Three.js Intelligence Core
+  vendor/three/         three.js r170 (MIT), vendored so nothing loads from a CDN
+```
+
+**Views.** *Overview* answers what is happening, what supports it, what to try
+and what is still unknown, with KPI tiles and charts. *Evidence* is the audit
+surface for the trace (FACT / PATTERN / HYPOTHESIS / UNKNOWN, each with a glyph
+and a label, never colour alone) and the recommended experiment, marked
+**Not yet measured**. *Copilot* is the conversation with voice input, spoken
+answers, the per-answer source (validated AI or deterministic, with the reason)
+and its evidence. *Updates* generates proactive nudges on demand. *System* shows
+what the server actually reports and the 3D rendering mode.
+
+**Intelligence Core (3D).** Every element encodes real data: one pillar per
+week of `weekly_revenue`; particles carry each week's payments into the engine
+at the centre (allocated by revenue share); four rings hold one arc per trace
+item at its confidence level; a beam marks the single recommended experiment.
+The canvas sits behind the UI with `pointer-events: none` and is never required:
+
+| Mode | When |
+|---|---|
+| Full | capable desktops (DPR ≤ 1.75, 520 particles) |
+| Low power | phones, ≤ 4 cores / ≤ 4 GB, Save-Data, or measured sustained frames > 34 ms (DPR ≤ 1.5, 30 fps cap, 160 particles, no MSAA) |
+| Static | `prefers-reduced-motion: reduce`: one frame, re-rendered only on state changes |
+| Off | no WebGL, a load error or a lost context: a static SVG diagram replaces it |
+
+The mode can be forced from *System → 3D rendering*. Rendering pauses when the
+core is off screen or the tab is hidden.
+
+**Honesty rules the UI follows.** Numbers are rendered exactly as the backend
+returns them; a section that fails validation shows *Unavailable*, never a
+substitute. The first weekly bar is labelled *Partial week* when the window
+starts mid-week. Model text is inserted with `textContent` only. API and voice
+failures are explained with a retry; nothing is simulated. Synthetic data is
+labelled in the top bar, the rail, every view and the System page.
 
 ## Honest data statement
 
@@ -93,9 +166,30 @@ stay visible.
 
 ## Tests
 
-```bash
-python -m unittest discover -s tests -v
+```powershell
+python -m unittest discover -s tests -v      # backend, API contract, static serving
+node --test "tests/frontend/*.test.mjs"      # frontend modules (Node 20+, no packages)
+python tests\e2e\e2e_ui.py                   # browser E2E, see below
 ```
+
+The E2E suite needs Playwright: `pip install playwright` then
+`python -m playwright install chromium`. Add `--shots <dir>` to save screenshots.
+
+- `tests/test_api_contract.py` — `/insights` equals the deterministic engine;
+  `/ask` reports `source` / `fallback_reason` / `action` (including validated and
+  rejected LLM output); voice and reset failure paths; every asset referenced by
+  `index.html` is served; every relative JS import resolves; gzip is applied.
+- `tests/frontend/modules.test.mjs` — formatting, response validation, API
+  error kinds (network / HTTP / timeout / cancel), the voice state machine, i18n
+  key and placeholder parity across all four languages, render-mode resolution.
+- `tests/e2e/e2e_ui.py` — starts uvicorn on a free port and drives Chromium
+  through every workflow: data loading, charts and keyboard tooltips, evidence
+  filters, copilot (real `/ask`), XSS-safe rendering, error and retry, reset
+  confirmation, language switching, nudges, system status, keyboard navigation,
+  reduced motion, the WebGL-unavailable fallback, and no horizontal overflow at
+  360 / 390 / 768 / 1280 / 1440 px. Voice success paths use route mocks plus
+  Chromium's fake microphone because Sarvam needs a key; `/reset` is mocked in
+  the browser so a run does not delete your local interaction log.
 
 - `tests/test_llm_safety.py` — sanitization, a valid trace → valid explanation,
   and every rejection/fallback path (no network, no database).
@@ -113,6 +207,24 @@ python -m unittest discover -s tests -v
 - **Phase 3** — LLM safety layer: sanitized input, constrained prompt, validated
   output, deterministic fallback. The model explains; it never decides.
 
-Not yet built (later phases, tracked separately): wiring the trace/action into
-`/ask` and `/nudge`, scripted-demo cache, persistent memory, frontend, voice/n8n,
-E2E, hardening.
+- **Frontend** — merchant workspace with the Three.js Intelligence Core, the
+  evidence audit surface, copilot with voice, proactive updates and system
+  status; the `/insights` endpoint and `source` / `fallback_reason` / `action`
+  on `/ask`.
+
+Not yet built (tracked separately): scripted-demo cache warming, persistent
+memory (Cognee), scheduled nudge delivery (the n8n workflow's delivery step is
+a stub), authentication.
+
+### Known limitations
+
+- Voice has only been exercised against mocked Sarvam responses (no key was
+  available). The backend labels uploads `audio/webm`; Chrome, Edge and Firefox
+  record WebM/Opus, while Safari records MP4, which Sarvam may reject.
+  `/voice/tts` labels its audio `audio/mpeg`; browsers sniff the real format.
+- Trace values, experiment wording and the experiment text inside deterministic
+  answers come from the analytics engine in English; the UI says so in other
+  languages.
+- Fonts load from Google Fonts; offline, system fonts are used instead.
+- Conversation history is one in-process list shared by every browser session
+  (single-merchant demo).
