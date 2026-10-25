@@ -707,19 +707,37 @@ def deterministic_explanation(context: Any, trace: Any, action: Any, language: s
     revenues = [v for v in (
         _as_number(row.get("revenue")) for row in _as_rows(context.get("weekly_revenue"))
     ) if v is not None]
-    if revenues:
+    # weekly_revenue rows are calendar-week buckets of the trailing window, so
+    # the first is usually partial: the row count is not the window length.
+    # Use the window length the context states (weekday_profile.weeks, the
+    # same trailing window); without it, report the total and no average.
+    window = _as_dict(context.get("weekday_profile")).get("weeks")
+    weeks = window if isinstance(window, int) and not isinstance(window, bool) and window > 0 else None
+    if revenues and weeks:
         total = round(sum(revenues), 2)
-        avg = round(total / len(revenues), 2)
+        avg = round(total / weeks, 2)
         if lang == "es":
-            parts.append(f"El ingreso total de las últimas {len(revenues)} semanas es {total} (promedio {avg} por semana).")
+            parts.append(f"El ingreso total de las últimas {weeks} semanas es {total} (promedio {avg} por semana).")
         elif lang == "fr":
-            parts.append(f"Le revenu total des {len(revenues)} dernières semaines est de {total} (moyenne {avg} par semaine).")
+            parts.append(f"Le revenu total des {weeks} dernières semaines est de {total} (moyenne {avg} par semaine).")
         elif lang == "en":
-            parts.append(f"Total revenue for the past {len(revenues)} weeks is {total} (average {avg} per week).")
+            parts.append(f"Total revenue for the past {weeks} weeks is {total} (average {avg} per week).")
         elif lang == "hi":
-            parts.append(f"पिछले {len(revenues)} हफ्तों की कुल कमाई {total} है (औसत {avg} प्रति सप्ताह)।")
+            parts.append(f"पिछले {weeks} हफ्तों की कुल कमाई {total} है (औसत {avg} प्रति सप्ताह)।")
         else: # hinglish
-            parts.append(f"Pichhle {len(revenues)} hafte ka total revenue {total} hai (average {avg} per hafta).")
+            parts.append(f"Pichhle {weeks} hafte ka total revenue {total} hai (average {avg} per hafta).")
+    elif revenues:
+        total = round(sum(revenues), 2)
+        if lang == "es":
+            parts.append(f"El ingreso total del periodo reciente es {total}.")
+        elif lang == "fr":
+            parts.append(f"Le revenu total de la période récente est de {total}.")
+        elif lang == "en":
+            parts.append(f"Total revenue in the recent window is {total}.")
+        elif lang == "hi":
+            parts.append(f"हाल की अवधि की कुल कमाई {total} है।")
+        else: # hinglish
+            parts.append(f"Haal ki avadhi ka total revenue {total} hai.")
 
     weekday = _as_dict(context.get("weakest_weekday"))
     day = weekday.get("weekday")
@@ -836,7 +854,9 @@ def deterministic_explanation(context: Any, trace: Any, action: Any, language: s
 
 def _default_transport(url: str, payload: dict, timeout: float) -> dict:
     """The only place Salah touches the network for LLM work."""
-    resp = requests.post(url, json=payload, timeout=timeout)
+    # Key in a header, not the URL: request URLs end up in exception text.
+    resp = requests.post(url, json=payload, timeout=timeout,
+                         headers={"x-goog-api-key": _api_key()})
     resp.raise_for_status()
     return resp.json()
 

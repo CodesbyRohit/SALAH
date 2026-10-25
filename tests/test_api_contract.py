@@ -62,6 +62,11 @@ class HealthContractTests(_ClientCase):
         self.assertEqual(data["voice"], {"available": False, "languages": ["en", "hi"]})
         self.assertEqual(set(data["languages"]), {"en", "hi", "es", "fr"})
 
+    def test_health_does_not_expose_filesystem_paths(self):
+        memory = self.client.get("/api/health").json()["memory"]
+        self.assertEqual(memory["local_log"], "interactions.jsonl")
+        self.assertNotIn(str(ROOT), json.dumps(self.client.get("/api/health").json()))
+
     def test_health_reports_voice_available_with_key(self):
         with mock.patch.dict(os.environ, {"SARVAM_API_KEY": "test-key"}):
             data = self.client.get("/api/health").json()
@@ -89,6 +94,62 @@ class InsightsContractTests(_ClientCase):
         with mock.patch.object(main.analytics, "build_merchant_context", side_effect=RuntimeError("no db")):
             res = self.client.get("/insights")
         self.assertEqual(res.status_code, 500)
+
+    def test_analytics_failure_is_a_500_everywhere_without_internal_detail(self):
+        # Before: /ask and /nudge answered from an empty context ("0 lapsed
+        # regular customers"), and 500 bodies echoed the exception text.
+        secret = "sqlite at /srv/private/merchant.db exploded"
+        with mock.patch.object(main.analytics, "build_merchant_context", side_effect=RuntimeError(secret)):
+            for method, path, body in (
+                ("get", "/context", None),
+                ("get", "/insights", None),
+                ("post", "/ask", {"question": "kya karun?", "language": "en"}),
+                ("post", "/nudge", {"force": True, "language": "en"}),
+            ):
+                with self.assertLogs("salah", level="ERROR"):
+                    res = getattr(self.client, method)(path, json=body) if body else getattr(self.client, method)(path)
+                self.assertEqual(res.status_code, 500, path)
+                self.assertNotIn("exploded", res.text, path)
+                self.assertNotIn("/srv/private", res.text, path)
+        main.memory.store.assert_not_called()
+
+
+class DeterministicRevenueWordingTests(unittest.TestCase):
+    def test_average_uses_the_window_length_not_the_calendar_bucket_count(self):
+        ctx = {
+            "weekly_revenue": [{"week": "2024-W43", "revenue": 300.0}]
+            + [{"week": f"2024-W{w}", "revenue": 925.0} for w in range(44, 52)],
+            "weekday_profile": {"weeks": 8},
+        }
+        text = llm.deterministic_explanation(ctx, [], {"priority": "none"}, language="en")
+        self.assertIn("past 8 weeks is 7700.0 (average 962.5 per week)", text)
+        self.assertNotIn("9 weeks", text)
+
+    def test_without_a_window_length_no_average_is_invented(self):
+        ctx = {"weekly_revenue": [{"week": "2024-W50", "revenue": 500.0}, {"week": "2024-W51", "revenue": 700.0}]}
+        for lang in ("en", "hi", "es", "fr", "hinglish"):
+            text = llm.deterministic_explanation(ctx, [], {"priority": "none"}, language=lang)
+            self.assertIn("1200.0", text, lang)
+            self.assertNotIn("600.0", text, lang)
+
+    @unittest.skipUnless(DB_READY, "data/merchant.db missing — run: python data/seed.py")
+    def test_canonical_dataset_wording(self):
+        text = llm.deterministic_explanation(analytics.build_merchant_context(), [], {"priority": "none"}, language="en")
+        self.assertIn("Total revenue for the past 8 weeks is 7677.0 (average 959.62 per week).", text)
+
+
+class GeminiTransportTests(unittest.TestCase):
+    def test_api_key_is_sent_in_a_header_not_the_url(self):
+        # Regression: the key was dropped entirely when the safety layer was
+        # added, so every configured Gemini call failed and fell back.
+        fake = mock.Mock()
+        fake.json.return_value = {"candidates": []}
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "k-123"}),                 mock.patch.object(llm.requests, "post", return_value=fake) as post:
+            llm._default_transport("https://example.invalid/model:generateContent", {"x": 1}, 5)
+        url = post.call_args.args[0]
+        self.assertNotIn("k-123", url)
+        self.assertEqual(post.call_args.kwargs["headers"]["x-goog-api-key"], "k-123")
+        fake.raise_for_status.assert_called_once()
 
 
 @unittest.skipUnless(DB_READY, "data/merchant.db missing — run: python data/seed.py")

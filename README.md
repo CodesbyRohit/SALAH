@@ -208,6 +208,24 @@ python tests\e2e\e2e_ui.py                   # browser E2E, see below
 The E2E suite needs Playwright: `pip install playwright` then
 `python -m playwright install chromium`. Add `--shots <dir>` to save screenshots.
 
+### Testing a deployment
+
+Both commands make real requests; nothing is mocked except what the E2E suite
+always mocks (Sarvam, `/reset`).
+
+```powershell
+# API smoke: health, /context and /insights compared with the dataset regenerated
+# locally from source, /ask and /nudge (valid and invalid input), static files.
+python tests\smoke\deployed_smoke.py https://salah-liart.vercel.app
+# Protected preview: send each request through the Vercel CLI (npx vercel login first)
+python tests\smoke\deployed_smoke.py https://<preview>.vercel.app --via vercel
+
+# Browser E2E against a deployment. For a protected preview, run it from a
+# directory linked to the project (npx vercel link) under `vercel env run`, which
+# supplies a short-lived VERCEL_OIDC_TOKEN; the suite sends it only to that origin.
+npx vercel env run -- python <repo>\tests\e2e\e2e_ui.py --base-url https://<preview>.vercel.app
+```
+
 - `tests/test_api_contract.py` — `/insights` equals the deterministic engine;
   `/ask` reports `source` / `fallback_reason` / `action` (including validated and
   rejected LLM output); voice and reset failure paths; every asset referenced by
@@ -266,4 +284,8 @@ a stub), authentication.
   languages.
 - Fonts load from Google Fonts; offline, system fonts are used instead.
 - Conversation history is one in-process list shared by every browser session
-  (single-merchant demo).
+  (single-merchant demo). On serverless it is also per instance.
+- The API has no authentication and no rate limiting; CORS allows any origin.
+  Fine for a public synthetic demo, but a configured `GEMINI_API_KEY` makes
+  `/ask` a paid call anyone can trigger: add rate limiting (for example a Vercel
+  Firewall rule) before enabling it on a public URL.

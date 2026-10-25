@@ -8,6 +8,16 @@ unittest suite because it needs a browser:
     python -m pip install playwright && python -m playwright install chromium
     python tests/e2e/e2e_ui.py              # add --shots DIR to save screenshots
 
+Against a deployment instead of a local server (same checks, real remote API):
+
+    python tests/e2e/e2e_ui.py --base-url https://<deployment>.vercel.app
+
+For a deployment behind Vercel Deployment Protection, run it under
+`vercel env run` from a directory linked to the project, so VERCEL_OIDC_TOKEN
+is set. It is sent as x-vercel-trusted-oidc-idp-token on requests to that
+origin only (never to third-party origins such as Google Fonts) and is never
+printed.
+
 What is real and what is mocked:
   * /context, /insights, /ask, /nudge, /api/health — real backend responses.
   * Voice success paths (/voice/stt, /voice/tts) need a Sarvam key, so they are
@@ -89,21 +99,34 @@ def tiny_wav() -> bytes:
     return buf.getvalue()
 
 
-def api_json(base: str, path: str):
-    with urllib.request.urlopen(base + path, timeout=10) as r:
-        return json.loads(r.read())
+def api_json(api, path: str):
+    resp = api.get(path, timeout=30000)
+    assert resp.ok, f"{path}: HTTP {resp.status}"
+    return resp.json()
 
 
 class Run:
-    def __init__(self, browser, base, shots):
+    def __init__(self, browser, base, shots, auth=None):
         self.browser = browser
         self.base = base
+        self.auth = auth or {}
         self.shots = Path(shots) if shots else None
         if self.shots:
             self.shots.mkdir(parents=True, exist_ok=True)
 
+    def context(self, **ctx):
+        context = self.browser.new_context(**ctx)
+        if self.auth:
+            context.route(f"{self.base}/**", lambda route: route.fallback(headers=self.headers(route.request)))
+        return context
+
+    def headers(self, request):
+        """Request headers plus deployment auth, for handlers that fetch the
+        real response themselves (route.fetch bypasses context routes)."""
+        return {**request.headers, **self.auth}
+
     def page(self, viewport=(1440, 900), **ctx):
-        context = self.browser.new_context(viewport={"width": viewport[0], "height": viewport[1]}, **ctx)
+        context = self.context(viewport={"width": viewport[0], "height": viewport[1]}, **ctx)
         page = context.new_page()
         page.errors = []
         page.on("pageerror", lambda e: page.errors.append(f"pageerror: {e}"))
@@ -127,28 +150,39 @@ class Run:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--shots", default=None)
+    ap.add_argument("--base-url", default=None, help="test a deployment instead of starting a local server")
     args = ap.parse_args()
 
-    port = free_port()
-    server = start_server(port)
-    base = f"http://127.0.0.1:{port}"
-    ctx = api_json(base, "/context")
-    ins = api_json(base, "/insights")
-    print(f"SALAH E2E against {base}")
+    auth = {}
+    if args.base_url:
+        server = None
+        base = args.base_url.rstrip("/")
+        token = os.getenv("VERCEL_OIDC_TOKEN")
+        if token:
+            auth = {"x-vercel-trusted-oidc-idp-token": token}
+    else:
+        port = free_port()
+        server = start_server(port)
+        base = f"http://127.0.0.1:{port}"
+    print(f"SALAH E2E against {base}" + (" (Vercel OIDC auth)" if auth else ""))
     try:
         with sync_playwright() as p:
+            api = p.request.new_context(base_url=base, extra_http_headers=auth)
+            ctx, ins = (api_json(api, path) for path in ("/context", "/insights"))
+            api.dispose()
             browser = p.chromium.launch(args=[
                 "--use-fake-ui-for-media-stream",
                 "--use-fake-device-for-media-stream",
                 "--autoplay-policy=no-user-gesture-required",
                 "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
             ])
-            run = Run(browser, base, args.shots)
+            run = Run(browser, base, args.shots, auth)
             suite(run, ctx, ins)
             browser.close()
     finally:
-        server.terminate()
-        server.wait(timeout=10)
+        if server:
+            server.terminate()
+            server.wait(timeout=10)
 
     passed = sum(1 for _, ok, _ in RESULTS if ok)
     print(f"\n{passed}/{len(RESULTS)} browser checks passed")
@@ -379,7 +413,7 @@ def suite(run: Run, ctx: dict, ins: dict):
     @check("voice flow: record → transcript for review → send → listen → stop (Sarvam mocked)")
     def _():
         def health(route):
-            resp = route.fetch()
+            resp = route.fetch(headers=run.headers(route.request))
             data = resp.json()
             data["voice"] = {"available": True, "languages": ["en", "hi"]}
             route.fulfill(response=resp, json=data)
@@ -415,11 +449,11 @@ def suite(run: Run, ctx: dict, ins: dict):
 
     @check("voice: microphone permission denied is explained")
     def _():
-        context = run.browser.new_context(viewport={"width": 1280, "height": 800}, permissions=[])
+        context = run.context(viewport={"width": 1280, "height": 800}, permissions=[])
         pg = context.new_page()
         pg.add_init_script("""navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException('denied', 'NotAllowedError'));""")
         def health(route):
-            resp = route.fetch()
+            resp = route.fetch(headers=run.headers(route.request))
             data = resp.json()
             data["voice"] = {"available": True, "languages": ["en", "hi"]}
             route.fulfill(response=resp, json=data)
